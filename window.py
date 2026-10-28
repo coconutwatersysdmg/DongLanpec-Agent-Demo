@@ -4,29 +4,24 @@ import html
 import json
 import re
 import sqlite3
-from pathlib import Path
 from types import SimpleNamespace
 
 from PyQt5.QtCore import QThread, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame,
+    QAbstractItemView, QDialog, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-    QListWidget, QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser,
+    QListWidget, QTableWidget, QTableWidgetItem, QTextBrowser,
     QVBoxLayout, QWidget,
 )
 
 from ai_support.api_client import DeepSeekClient
 from demo_db import DemoRepository
-from document_reader import DocumentBundle, identify_equipment, scan_inputs
+from document_reader import DocumentBundle
 from models import STAGES
 from pipeline import TubeBundleAgent
 from review_session import ReviewSession
 from settings import load_settings, settings_dialog
-
-
-EXAMPLE_ZIP = Path(__file__).resolve().parent.parent / "01-管壳式热交换器-输入文件 (2).zip"
-
 
 class TaskThread(QThread):
     result_ready = pyqtSignal(object)
@@ -52,8 +47,6 @@ class DesignWindow(QMainWindow):
         self.repository = repository or DemoRepository()
         self._owns_repository = repository is None
         self.config = load_settings()
-        self.bundle = DocumentBundle([])
-        self.selected_paths = []
         self.session = None
         self.prepared = None
         self._updating_table = False
@@ -269,47 +262,6 @@ class DesignWindow(QMainWindow):
 
     def toggle_review_drawer(self) -> None:
         self.set_review_drawer_visible(self.review_panel.isHidden())
-
-    def select_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "选择输入文件", "", "设计资料 (*.zip *.pdf *.xlsx *.xlsm *.doc *.docx);;所有文件 (*)")
-        if files:
-            self.load_inputs(files)
-
-    def use_example_package(self):
-        if not EXAMPLE_ZIP.is_file():
-            QMessageBox.warning(self, "未找到示例", f"示例压缩包不在预期位置：\n{EXAMPLE_ZIP}")
-            return
-        self.load_inputs([str(EXAMPLE_ZIP)])
-
-    def load_inputs(self, paths):
-        self.selected_paths = [str(Path(path)) for path in paths]
-        self.file_label.setText("正在扫描文件，可继续查看界面……")
-        self._start_worker(lambda: scan_inputs(self.selected_paths), self._finish_scan)
-
-    def _finish_scan(self, bundle):
-        self.bundle = bundle
-        equipment = identify_equipment(self.bundle)
-        self.equipment_combo.clear()
-        self.equipment_combo.addItems(equipment)
-        self.file_label.setText(f"已选择 {len(paths)} 个输入项，解析 {len(self.bundle.documents)} 个文件，识别 {len(equipment)} 台设备")
-        self.append_chat("assistant", f"文件扫描完成：识别到 {len(equipment)} 个设备位号。请确认当前设备、产品型式和 DN，再点击“开始处理”。")
-        self._set_progress(1)
-
-    def start_analysis(self):
-        equipment = self.equipment_combo.currentText().strip()
-        if not equipment:
-            QMessageBox.information(self, "请确认设备", "没有识别到设备位号，请在“设备位号”框中手工输入后继续。")
-            return
-        product_type, dn = self.product_combo.currentText(), self.dn.value()
-        client = DeepSeekClient(self.config) if self.config.configured else None
-        def work():
-            local_repo = DemoRepository(self.repository.path)
-            try:
-                return TubeBundleAgent(local_repo, client).prepare_design(self.bundle, equipment, product_type, dn)
-            finally:
-                local_repo.close()
-        self.review_status.setText("分析中")
-        self._start_worker(work, self._accept_prepared)
 
     def start_with_bundle(self, bundle, equipment, product_type, dn):
         client = DeepSeekClient(self.config) if self.config.configured else None
