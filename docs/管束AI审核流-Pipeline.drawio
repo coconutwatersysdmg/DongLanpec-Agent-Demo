@@ -1,113 +1,302 @@
-<mxfile host="app.diagrams.net" modified="2026-10-28T10:00:00.000Z" agent="Codex" version="24.7.17" type="device" compressed="false">
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/24.7.17 Chrome/128.0.6613.36 Electron/32.0.1 Safari/537.36" compressed="false" version="24.7.17" pages="3">
   <diagram id="pipeline" name="1-总体Pipeline">
-    <mxGraphModel dx="1400" dy="2200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="1654" math="0" shadow="0">
+    <mxGraphModel dx="1194" dy="877" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="1654" math="0" shadow="0">
       <root>
-        <mxCell id="0"/><mxCell id="1" parent="0"/>
-        <mxCell id="title" value="管束 AI Agent · 人工审核 Pipeline" style="text;html=1;align=left;verticalAlign=middle;fontSize=28;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="1"><mxGeometry x="160" y="50" width="720" height="50" as="geometry"/></mxCell>
-        <mxCell id="subtitle" value="文件只提供证据候选 · AI 不能自行审核或写生产库" style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontColor=#5E6B7A;" vertex="1" parent="1"><mxGeometry x="160" y="100" width="650" height="30" as="geometry"/></mxCell>
-        <mxCell id="start" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#FFFFFF;strokeColor=#2D4E91;strokeWidth=5;" vertex="1" parent="1"><mxGeometry x="530" y="145" width="42" height="42" as="geometry"/></mxCell>
-        <mxCell id="spine1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" edge="1" parent="1" source="start" target="c1"><mxGeometry relative="1" as="geometry"/></mxCell>
-
-        <mxCell id="c1" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="210" y="235" width="680" height="165" as="geometry"/></mxCell>
-        <mxCell id="c1h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="212" y="237" width="676" height="70" as="geometry"/></mxCell>
-        <mxCell id="n1" value="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="245" y="250" width="46" height="46" as="geometry"/></mxCell>
-        <mxCell id="t1" value="接收与设备确认" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" vertex="1" parent="1"><mxGeometry x="315" y="250" width="360" height="45" as="geometry"/></mxCell>
-        <mxCell id="b1" value="• 上传 PDF / XLSX / DOC / ZIP&#xa;• 扫描多台设备，先由用户确认设备位号" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" vertex="1" parent="1"><mxGeometry x="250" y="315" width="585" height="72" as="geometry"/></mxCell>
-
-        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" edge="1" parent="1" source="c1" target="c2"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="c2" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="210" y="455" width="680" height="165" as="geometry"/></mxCell>
-        <mxCell id="c2h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="212" y="457" width="676" height="70" as="geometry"/></mxCell>
-        <mxCell id="n2" value="2" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="245" y="470" width="46" height="46" as="geometry"/></mxCell>
-        <mxCell id="t2" value="装载基础数据" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" vertex="1" parent="1"><mxGeometry x="315" y="470" width="360" height="45" as="geometry"/></mxCell>
-        <mxCell id="b2" value="• 模拟上游模块已保存参数&#xa;• 按产品型式装载默认值，保留原程序优先级" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" vertex="1" parent="1"><mxGeometry x="250" y="535" width="585" height="72" as="geometry"/></mxCell>
-
-        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" edge="1" parent="1" source="c2" target="c3"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="c3" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="210" y="675" width="680" height="175" as="geometry"/></mxCell>
-        <mxCell id="c3h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="212" y="677" width="676" height="70" as="geometry"/></mxCell>
-        <mxCell id="n3" value="3" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="245" y="690" width="46" height="46" as="geometry"/></mxCell>
-        <mxCell id="t3" value="管束 Agent 提取与建议" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" vertex="1" parent="1"><mxGeometry x="315" y="690" width="420" height="45" as="geometry"/></mxCell>
-        <mxCell id="b3" value="• 检索当前设备证据，DeepSeek 提取结构化候选&#xa;• 文件缺失时查询同型式、同 DN 历史建议&#xa;• 事实、问题、冲突、建议分别标记" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=8;" vertex="1" parent="1"><mxGeometry x="250" y="755" width="585" height="82" as="geometry"/></mxCell>
-
-        <mxCell id="e34" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" edge="1" parent="1" source="c3" target="c4"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="c4" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="210" y="905" width="680" height="165" as="geometry"/></mxCell>
-        <mxCell id="c4h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="212" y="907" width="676" height="70" as="geometry"/></mxCell>
-        <mxCell id="n4" value="4" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="245" y="920" width="46" height="46" as="geometry"/></mxCell>
-        <mxCell id="t4" value="联动计算与规则校验" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" vertex="1" parent="1"><mxGeometry x="315" y="920" width="400" height="45" as="geometry"/></mxCell>
-        <mxCell id="b4" value="• 重算派生参数与上下游依赖&#xa;• 错误定位到具体参数，未通过则不能进入下一步" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" vertex="1" parent="1"><mxGeometry x="250" y="985" width="590" height="72" as="geometry"/></mxCell>
-
-        <mxCell id="e45" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" edge="1" parent="1" source="c4" target="c5"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="c5" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="210" y="1125" width="680" height="175" as="geometry"/></mxCell>
-        <mxCell id="c5h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="212" y="1127" width="676" height="70" as="geometry"/></mxCell>
-        <mxCell id="n5" value="5" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="245" y="1140" width="46" height="46" as="geometry"/></mxCell>
-        <mxCell id="t5" value="人工审核四个阶段" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" vertex="1" parent="1"><mxGeometry x="315" y="1140" width="400" height="45" as="geometry"/></mxCell>
-        <mxCell id="b5" value="• 管板型式 → 布管与元件 → 管-板连接 → 轴向设计&#xa;• 错误标红并给推荐值；重新审核通过后还需用户确认" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" vertex="1" parent="1"><mxGeometry x="250" y="1205" width="590" height="78" as="geometry"/></mxCell>
-
-        <mxCell id="feedback" value="修改 / 校验未通过" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D4E91;strokeWidth=3;dashed=1;dashPattern=8 8;endArrow=block;endFill=1;fontSize=14;fontColor=#2D4E91;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="c5" target="c4"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="980" y="1210"/><mxPoint x="980" y="985"/></Array></mxGeometry></mxCell>
-        <mxCell id="e56" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" edge="1" parent="1" source="c5" target="c6"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="c6" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="210" y="1365" width="680" height="165" as="geometry"/></mxCell>
-        <mxCell id="c6h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="212" y="1367" width="676" height="70" as="geometry"/></mxCell>
-        <mxCell id="n6" value="6" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="245" y="1380" width="46" height="46" as="geometry"/></mxCell>
-        <mxCell id="t6" value="独立演示库提交" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" vertex="1" parent="1"><mxGeometry x="315" y="1380" width="400" height="45" as="geometry"/></mxCell>
-        <mxCell id="b6" value="• 四阶段全部通过后原子写入 SQLite&#xa;• 记录版本和审计日志，不接触生产 MySQL" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" vertex="1" parent="1"><mxGeometry x="250" y="1445" width="590" height="72" as="geometry"/></mxCell>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="管束 AI Agent" style="text;html=1;align=left;verticalAlign=middle;fontSize=28;fontStyle=1;fontColor=#1F3763;" parent="1" vertex="1">
+          <mxGeometry x="160" y="50" width="720" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="start" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#FFFFFF;strokeColor=#2D4E91;strokeWidth=5;" parent="1" vertex="1">
+          <mxGeometry x="530" y="145" width="42" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="spine1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" parent="1" source="start" target="c1" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c1" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" parent="1" vertex="1">
+          <mxGeometry x="210" y="235" width="680" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="c1h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" parent="1" vertex="1">
+          <mxGeometry x="212" y="237" width="676" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="245" y="250" width="46" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" value="接收管束设计上下文" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" parent="1" vertex="1">
+          <mxGeometry x="315" y="250" width="360" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="b1" value="• 接收总 Agent / 数据空间路由的管束数据&#xa;• 从数据库读取当前设备和前置模块参数" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" parent="1" vertex="1">
+          <mxGeometry x="250" y="315" width="585" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" parent="1" source="c1" target="c2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" parent="1" vertex="1">
+          <mxGeometry x="210" y="455" width="680" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="c2h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" parent="1" vertex="1">
+          <mxGeometry x="212" y="457" width="676" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="2" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="245" y="470" width="46" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="t2" value="组装基础参数上下文" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" parent="1" vertex="1">
+          <mxGeometry x="315" y="470" width="360" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" value="• 按原程序优先级合并数据库值与产品默认值&#xa;• 缺失元件信息时检索同型式、同 DN 历史产品" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" parent="1" vertex="1">
+          <mxGeometry x="250" y="535" width="585" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" parent="1" source="c2" target="c3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" parent="1" vertex="1">
+          <mxGeometry x="210" y="675" width="680" height="175" as="geometry" />
+        </mxCell>
+        <mxCell id="c3h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" parent="1" vertex="1">
+          <mxGeometry x="212" y="677" width="676" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="3" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="245" y="690" width="46" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="t3" value="管束 Agent 识别与建议" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" parent="1" vertex="1">
+          <mxGeometry x="315" y="690" width="420" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" value="• 从流转资料识别管束候选参数，统一字段与单位&#xa;• 对照基础值识别缺失、冲突和修改建议&#xa;• 事实、冲突、建议均保留来源与置信信息" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=8;" parent="1" vertex="1">
+          <mxGeometry x="250" y="755" width="585" height="82" as="geometry" />
+        </mxCell>
+        <mxCell id="e34" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" parent="1" source="c3" target="c4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c4" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" parent="1" vertex="1">
+          <mxGeometry x="210" y="905" width="680" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="c4h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" parent="1" vertex="1">
+          <mxGeometry x="212" y="907" width="676" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="4" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="245" y="920" width="46" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="t4" value="联动计算与确定性校验" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" parent="1" vertex="1">
+          <mxGeometry x="315" y="920" width="400" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" value="• 重算派生参数与上下游依赖&#xa;• 错误定位到具体参数，未通过则不能进入下一步" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" parent="1" vertex="1">
+          <mxGeometry x="250" y="985" width="590" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="e45" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" parent="1" source="c4" target="c5" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c5" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" parent="1" vertex="1">
+          <mxGeometry x="210" y="1125" width="680" height="175" as="geometry" />
+        </mxCell>
+        <mxCell id="c5h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" parent="1" vertex="1">
+          <mxGeometry x="212" y="1127" width="676" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="5" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="245" y="1140" width="46" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="t5" value="人工审核与迭代修正" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" parent="1" vertex="1">
+          <mxGeometry x="315" y="1140" width="400" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="b5" value="• 管板型式 → 布管与元件 → 管-板连接 → 轴向设计&#xa;• 错误标红并给出原因和推荐值，修改后循环重审&#xa;• 全部通过后仍由用户确认才能进入下一步" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=8;" parent="1" vertex="1">
+          <mxGeometry x="250" y="1205" width="590" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="feedback" value="修改 / 校验未通过" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#2D4E91;strokeWidth=3;dashed=1;dashPattern=8 8;endArrow=block;endFill=1;fontSize=14;fontColor=#2D4E91;labelBackgroundColor=#FFFFFF;" parent="1" source="c5" target="c4" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="980" y="1210" />
+              <mxPoint x="980" y="985" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e56" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#2D4E91;strokeWidth=5;endArrow=none;" parent="1" source="c5" target="c6" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="c6" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=14;fillColor=#FFFFFF;strokeColor=#B9CBE9;strokeWidth=2;" parent="1" vertex="1">
+          <mxGeometry x="210" y="1365" width="680" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="c6h" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=16;fillColor=#EDF4FF;strokeColor=none;" parent="1" vertex="1">
+          <mxGeometry x="212" y="1367" width="676" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n6" value="6" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2D4E91;strokeColor=none;fontColor=#FFFFFF;fontSize=24;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="245" y="1380" width="46" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="t6" value="确认并存入数据库" style="text;html=1;align=left;verticalAlign=middle;fontSize=21;fontStyle=1;fontColor=#18233A;" parent="1" vertex="1">
+          <mxGeometry x="315" y="1380" width="400" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="b6" value="• 四阶段全部审核通过且用户确认后统一提交&#xa;• 写入管束设计参数、元件信息、来源和审核记录" style="text;html=1;align=left;verticalAlign=top;fontSize=16;fontColor=#26364D;spacingTop=10;" parent="1" vertex="1">
+          <mxGeometry x="250" y="1445" width="590" height="72" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
   <diagram id="stages" name="2-四阶段数据流">
     <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
-      <root><mxCell id="s0"/><mxCell id="s1" parent="s0"/>
-        <mxCell id="st" value="管束模块 · 四阶段审核与依赖" style="text;html=1;fontSize=28;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1"><mxGeometry x="80" y="50" width="650" height="50" as="geometry"/></mxCell>
-        <mxCell id="src1" value="模拟上游数据&#xa;设计数据 / 通用数据 / 元件附加参数" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F6FA;strokeColor=#AAB6C5;fontSize=16;fontColor=#26364D;" vertex="1" parent="s1"><mxGeometry x="80" y="160" width="280" height="95" as="geometry"/></mxCell>
-        <mxCell id="src2" value="程序默认值&#xa;按产品型式分类" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F6FA;strokeColor=#AAB6C5;fontSize=16;fontColor=#26364D;" vertex="1" parent="s1"><mxGeometry x="80" y="290" width="280" height="85" as="geometry"/></mxCell>
-        <mxCell id="src3" value="文件证据候选&#xa;当前设备 + 页码 / 工作表" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#D6A545;fontSize=16;fontColor=#5F470D;" vertex="1" parent="s1"><mxGeometry x="80" y="410" width="280" height="95" as="geometry"/></mxCell>
-        <mxCell id="src4" value="历史建议&#xa;同型式 + 最近 DN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4EEFF;strokeColor=#9B7AC7;fontSize=16;fontColor=#4D3372;" vertex="1" parent="s1"><mxGeometry x="80" y="540" width="280" height="85" as="geometry"/></mxCell>
-        <mxCell id="stage1" value="① 管板型式&#xa;&#xa;管板节点参数&#xa;布管限定圆 DL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1"><mxGeometry x="470" y="225" width="230" height="190" as="geometry"/></mxCell>
-        <mxCell id="stage2" value="② 布管与元件&#xa;&#xa;管程分程 / 中心距&#xa;拉杆 / 旁路挡板 / 防冲板" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1"><mxGeometry x="770" y="225" width="250" height="190" as="geometry"/></mxCell>
-        <mxCell id="stage3" value="③ 管-板连接&#xa;&#xa;连接方式&#xa;焊接结构与长度" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1"><mxGeometry x="1090" y="225" width="230" height="190" as="geometry"/></mxCell>
-        <mxCell id="stage4" value="④ 轴向设计&#xa;&#xa;换热管轴向参数&#xa;元件间距与厚度" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1"><mxGeometry x="1390" y="225" width="230" height="190" as="geometry"/></mxCell>
-        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="stage1" target="stage2"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="stage2" target="stage3"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="stage3" target="stage4"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="in1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#8796AA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="s1" source="src1" target="stage1"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="in2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#8796AA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="s1" source="src2" target="stage1"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="in3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#D6A545;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="s1" source="src3" target="stage2"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="650" y="458"/><mxPoint x="650" y="360"/></Array></mxGeometry></mxCell>
-        <mxCell id="in4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9B7AC7;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="s1" source="src4" target="stage2"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="895" y="583"/></Array></mxGeometry></mxCell>
-        <mxCell id="human" value="人工审核闸门&#xa;查看差异 → 直接修改 → 校验 → 接受并下一步" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F7EF;strokeColor=#3B8D62;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#215A3D;" vertex="1" parent="s1"><mxGeometry x="650" y="580" width="790" height="110" as="geometry"/></mxCell>
-        <mxCell id="hg1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage1" target="human"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="hg2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage2" target="human"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="hg3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage3" target="human"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="hg4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage4" target="human"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="db" value="独立 SQLite 演示库&#xa;四阶段全部通过后提交版本" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#FFFFFF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1"><mxGeometry x="930" y="780" width="240" height="130" as="geometry"/></mxCell>
-        <mxCell id="save" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="human" target="db"><mxGeometry relative="1" as="geometry"/></mxCell>
+      <root>
+        <mxCell id="s0" />
+        <mxCell id="s1" parent="s0" />
+        <mxCell id="st" value="管束模块 · 四阶段审核与依赖" style="text;html=1;fontSize=28;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1">
+          <mxGeometry x="80" y="50" width="650" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="src1" value="数据流转接收&#xa;总 Agent / 数据空间路由" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F6FA;strokeColor=#AAB6C5;fontSize=16;fontColor=#26364D;" vertex="1" parent="s1">
+          <mxGeometry x="80" y="160" width="280" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="src2" value="前置模块数据库&#xa;设计数据 / 通用数据" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F6FA;strokeColor=#AAB6C5;fontSize=16;fontColor=#26364D;" vertex="1" parent="s1">
+          <mxGeometry x="80" y="290" width="280" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="src3" value="程序默认与联动规则&#xa;按产品型式及原程序计算" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#D6A545;fontSize=16;fontColor=#5F470D;" vertex="1" parent="s1">
+          <mxGeometry x="80" y="410" width="280" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="src4" value="历史产品数据&#xa;同型式 + 同 DN 元件信息" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4EEFF;strokeColor=#9B7AC7;fontSize=16;fontColor=#4D3372;" vertex="1" parent="s1">
+          <mxGeometry x="80" y="540" width="280" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="stage1" value="① 管板型式&#xa;&#xa;管板节点参数&#xa;布管限定圆 DL" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1">
+          <mxGeometry x="470" y="225" width="230" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="stage2" value="② 布管与元件&#xa;&#xa;管程分程 / 中心距&#xa;拉杆 / 旁路挡板 / 防冲板" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1">
+          <mxGeometry x="770" y="225" width="250" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="stage3" value="③ 管-板连接&#xa;&#xa;连接方式&#xa;焊接结构与长度" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1">
+          <mxGeometry x="1090" y="225" width="230" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="stage4" value="④ 轴向设计&#xa;&#xa;换热管轴向参数&#xa;元件间距与厚度" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1">
+          <mxGeometry x="1390" y="225" width="230" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="stage1" target="stage2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="stage2" target="stage3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="stage3" target="stage4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="in1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#8796AA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="s1" source="src1" target="stage1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="in2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#8796AA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="s1" source="src2" target="stage1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="in3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#D6A545;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="s1" source="src3" target="stage2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="458" />
+              <mxPoint x="650" y="360" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="in4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9B7AC7;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="s1" source="src4" target="stage2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="895" y="583" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="human" value="人工审核闸门&#xa;查看差异 → 直接修改 → 校验 → 接受并下一步" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F7EF;strokeColor=#3B8D62;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#215A3D;" vertex="1" parent="s1">
+          <mxGeometry x="650" y="580" width="790" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="hg1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage1" target="human">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hg2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage2" target="human">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hg3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage3" target="human">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hg4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;dashed=1;endArrow=block;" edge="1" parent="s1" source="stage4" target="human">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="db" value="业务数据库&#xa;管束参数 / 元件信息 / 审核记录" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#FFFFFF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="s1">
+          <mxGeometry x="930" y="780" width="240" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="save" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=3;endArrow=block;endFill=1;" edge="1" parent="s1" source="human" target="db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
   <diagram id="states" name="3-状态流转">
     <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
-      <root><mxCell id="q0"/><mxCell id="q1" parent="q0"/>
-        <mxCell id="qt" value="管束 Agent · 状态流转" style="text;html=1;fontSize=28;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="q1"><mxGeometry x="90" y="55" width="600" height="50" as="geometry"/></mxCell>
-        <mxCell id="idle" value="等待文件" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2D4E91;strokeWidth=3;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="100" y="250" width="150" height="80" as="geometry"/></mxCell>
-        <mxCell id="scanning" value="扫描中" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="330" y="250" width="150" height="80" as="geometry"/></mxCell>
-        <mxCell id="choose" value="等待设备确认" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#D6A545;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="560" y="250" width="190" height="80" as="geometry"/></mxCell>
-        <mxCell id="running" value="分析中" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="830" y="250" width="150" height="80" as="geometry"/></mxCell>
-        <mxCell id="review" value="待审核" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#D6A545;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="1060" y="250" width="150" height="80" as="geometry"/></mxCell>
-        <mxCell id="approved" value="审核通过&#xa;等待用户确认" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F7EF;strokeColor=#3B8D62;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="1290" y="250" width="190" height="80" as="geometry"/></mxCell>
-        <mxCell id="saveState" value="保存中" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="1060" y="560" width="150" height="80" as="geometry"/></mxCell>
-        <mxCell id="done" value="已完成" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E8F7EF;strokeColor=#3B8D62;strokeWidth=3;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="1290" y="560" width="150" height="80" as="geometry"/></mxCell>
-        <mxCell id="needs" value="待修改 / 校验失败" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0F0;strokeColor=#C95B5B;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="830" y="430" width="190" height="80" as="geometry"/></mxCell>
-        <mxCell id="error" value="错误（可重试）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0F0;strokeColor=#C95B5B;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1"><mxGeometry x="560" y="650" width="190" height="80" as="geometry"/></mxCell>
-        <mxCell id="x1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;" edge="1" parent="q1" source="idle" target="scanning"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;" edge="1" parent="q1" source="scanning" target="choose"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x3" value="用户选择设备" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="choose" target="running"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;" edge="1" parent="q1" source="running" target="review"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x5" value="全部规则通过" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="review" target="approved"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x6" value="用户确认 + 保存本阶段 + 有下一阶段" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="approved" target="running"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1385" y="150"/><mxPoint x="905" y="150"/></Array></mxGeometry></mxCell>
-        <mxCell id="x7" value="用户确认 + 保存第四阶段" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="approved" target="saveState"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x8" value="事务成功" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="saveState" target="done"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x9" value="用户修改 / 规则错误" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#C95B5B;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="review" target="needs"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x10" value="手工修改 / 一键采用推荐值后重新审核" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#D6A545;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="needs" target="review"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x11" value="读取 / API / 写库失败" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#C95B5B;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="running" target="error"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="x12" value="重试" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="error" target="running"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="note" value="关键规则：人工修改会撤销当前阶段“已通过”；修改上游阶段会使依赖的下游审核失效。写库失败则整个事务回滚。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F6FA;strokeColor=#AAB6C5;fontSize=17;fontColor=#26364D;align=left;spacingLeft=18;" vertex="1" parent="q1"><mxGeometry x="390" y="850" width="900" height="95" as="geometry"/></mxCell>
+      <root>
+        <mxCell id="q0" />
+        <mxCell id="q1" parent="q0" />
+        <mxCell id="qt" value="管束 Agent · 状态流转" style="text;html=1;fontSize=28;fontStyle=1;fontColor=#1F3763;" vertex="1" parent="q1">
+          <mxGeometry x="90" y="55" width="600" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="idle" value="等待管束数据" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2D4E91;strokeWidth=3;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="100" y="250" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="scanning" value="数据装载中" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="330" y="250" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="choose" value="上下文确认" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#D6A545;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="560" y="250" width="190" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="running" value="Agent 处理中" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="830" y="250" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="review" value="待人工审核" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#D6A545;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="1060" y="250" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="approved" value="审核通过&#xa;等待用户确认" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F7EF;strokeColor=#3B8D62;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="1290" y="250" width="190" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="saveState" value="写入数据库" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDF4FF;strokeColor=#2D4E91;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="1060" y="560" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="done" value="已完成" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E8F7EF;strokeColor=#3B8D62;strokeWidth=3;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="1290" y="560" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="needs" value="待修改 / 校验失败" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0F0;strokeColor=#C95B5B;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="830" y="430" width="190" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="error" value="错误（可重试）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0F0;strokeColor=#C95B5B;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="560" y="650" width="190" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="x1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;" edge="1" parent="q1" source="idle" target="scanning">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;" edge="1" parent="q1" source="scanning" target="choose">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x3" value="上下文完整" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="choose" target="running">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;" edge="1" parent="q1" source="running" target="review">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x5" value="全部规则通过" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="review" target="approved">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x6" value="用户确认 + 有下一阶段" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="approved" target="running">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1385" y="150" />
+              <mxPoint x="905" y="150" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="x7" value="用户确认第四阶段" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="approved" target="saveState">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x8" value="事务成功" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3B8D62;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="saveState" target="done">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x9" value="用户修改 / 规则错误" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#C95B5B;strokeWidth=2;endArrow=block;fontSize=14;" edge="1" parent="q1" source="review" target="needs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x10" value="手工修改 / 一键采用推荐值后重新审核" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#D6A545;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="needs" target="review">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x11" value="数据读取 / 模型 / 写库失败" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#C95B5B;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="running" target="error">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x12" value="重试" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="error" target="running">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="note" value="关键规则：人工修改会撤销当前阶段“已通过”；修改上游阶段会使依赖的下游审核失效。写库失败则整个事务回滚。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F6FA;strokeColor=#AAB6C5;fontSize=17;fontColor=#26364D;align=left;spacingLeft=18;" vertex="1" parent="q1">
+          <mxGeometry x="390" y="850" width="900" height="95" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
