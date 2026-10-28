@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -621,14 +622,42 @@ class DesignWindow(QMainWindow):
 
     def open_settings(self):
         self.config = settings_dialog(self, self.config)
-        self.append_chat("assistant", "DeepSeek 设置已更新。只有点击“开始处理”时才会调用模型。" if self.config.configured else "当前保持离线审核模式。")
+        self.append_chat("assistant", "AI 设置已更新。" if self.config.configured else "当前为离线模式。")
+
+    def apply_chat_request(self, text: str) -> bool:
+        if self.session is None:
+            return False
+        for field, data in sorted(self.session.current_parameters.items(), key=lambda item: len(item[0]), reverse=True):
+            if field not in text:
+                continue
+            number = re.search(r"-?\d+(?:\.\d+)?", text.split(field, 1)[1])
+            if number is None:
+                continue
+            if data.get("derived"):
+                self.append_chat("assistant", f"{field} 由程序计算，不能直接修改。")
+                return False
+            value = float(number.group())
+            value = int(value) if value.is_integer() else value
+            try:
+                self.session.apply_edit(field, value)
+            except (KeyError, ValueError):
+                self.append_chat("assistant", f"{field} 不能直接修改。")
+                return False
+            self.render_stage()
+            self.set_review_drawer_visible(True)
+            self.issue_text.setPlainText("参数已修改，请重新审核。")
+            self.confirm_button.setEnabled(False)
+            self.append_chat("assistant", f"已将 {field} 改为 {value}，请在预览中审核。")
+            return True
+        return False
 
     def send_note(self):
         text = self.prompt.toPlainText().strip()
         if not text:
             return
         self.append_chat("user", text)
-        self.append_chat("assistant", "备注已记录在本次界面中。若备注会改变参数，请直接在右侧表格修改并重新审核。")
+        if not self.apply_chat_request(text):
+            self.append_chat("assistant", "已记录。")
         self.prompt.clear()
 
     def closeEvent(self, event):

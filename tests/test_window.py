@@ -69,6 +69,15 @@ class WindowTests(unittest.TestCase):
             fresh.close()
             fresh.deleteLater()
 
+    def test_chat_request_updates_preview_and_requires_review(self):
+        self.window.session.current_stage_index = 1
+        self.window.render_stage()
+        changed = self.window.apply_chat_request("换热管中心距 S 改为 34")
+        self.assertTrue(changed)
+        self.assertEqual(self.window.session.current_parameters["换热管中心距 S"]["value"], 34)
+        self.assertEqual(self.window.session.status, "待审核")
+        self.assertFalse(self.window.confirm_button.isEnabled())
+
     def test_prepared_design_opens_review_drawer_when_user_action_is_needed(self):
         self.assertFalse(self.window.review_panel.isHidden())
         self.assertTrue(self.window.review_toggle_button.isEnabled())
