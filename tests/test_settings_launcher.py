@@ -5,16 +5,29 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from settings import save_settings,load_settings
-from ai_support.api_client import APIConfig
+from settings import save_settings, load_settings
+from ai_support.api_client import APIConfig, DEEPSEEK_BASE_URL
 
 
 @unittest.skipUnless(os.name=='nt','Windows launcher and account encryption')
 class SettingsLauncherTests(unittest.TestCase):
+    def test_old_bailian_settings_are_not_reused_as_deepseek_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'settings.json'
+            target.write_text(json.dumps({
+                'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+                'model': 'qwen-plus',
+                'encrypted_key': 'not-a-deepseek-key',
+            }), encoding='utf-8')
+            config = load_settings(target)
+            self.assertEqual(config.base_url, DEEPSEEK_BASE_URL)
+            self.assertEqual(config.model, 'deepseek-v4-flash')
+            self.assertFalse(config.configured)
+
     def test_windows_remembered_key_roundtrips_without_plaintext_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             target=Path(tmp)/'settings.json'
-            config=APIConfig('https://dashscope.aliyuncs.com/compatible-mode/v1','test-only-dummy-key','qwen-plus')
+            config=APIConfig(DEEPSEEK_BASE_URL,'test-only-dummy-key','deepseek-v4-flash')
             save_settings(config,True,target)
             self.assertNotIn('test-only-dummy-key',target.read_text(encoding='utf-8'))
             self.assertEqual(load_settings(target).api_key,'test-only-dummy-key')
@@ -30,7 +43,7 @@ class SettingsLauncherTests(unittest.TestCase):
                 env=env,cwd=tmp,capture_output=True,input='\n',encoding='utf-8',errors='replace',timeout=25)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertEqual(target.read_bytes()[:8],b'\x89PNG\r\n\x1a\n')
-            self.assertIn('Components: 11',result.stdout)
+            self.assertIn('validation passed; waiting for user confirmation',result.stdout)
 
 
 if __name__=='__main__':unittest.main()

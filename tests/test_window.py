@@ -1,75 +1,81 @@
 import os
-os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
-import time
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import tempfile
 import unittest
-from unittest.mock import patch
-from PyQt5.QtWidgets import (
-    QApplication, QLabel, QGraphicsLineItem, QGraphicsRectItem, QTabWidget,
-)
-from PyQt5.QtTest import QTest
+from pathlib import Path
+
+from PyQt5.QtGui import QColor
+from PyQt5.QtWidgets import QApplication, QGraphicsView, QTabWidget
+
+from demo_db import DemoRepository
+from document_reader import DocumentBundle
 from window import DesignWindow
-from engine import EXAMPLE_TEXT
-from ai_support.api_client import APIConfig
 
 
 class WindowTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):cls.app=QApplication.instance() or QApplication([])
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        self.config_patch=patch('window.load_settings',return_value=APIConfig())
-        self.config_patch.start();self.window=DesignWindow()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = DemoRepository(Path(self.tmp.name) / "demo.sqlite3")
+        self.window = DesignWindow(repository=self.repo)
+        self.window.start_with_bundle(DocumentBundle([]), "E-1001", "AEU", 700)
 
-    def tearDown(self):self.window.close();self.window.deleteLater();self.config_patch.stop()
+    def tearDown(self):
+        self.window.close()
+        self.window.deleteLater()
+        self.repo.close()
+        self.tmp.cleanup()
 
-    def run_offline_example(self):
-        self.window.prompt.setPlainText(EXAMPLE_TEXT)
-        self.window.mode.setCurrentIndex(1)
-        self.window.start_agent()
-        deadline=time.monotonic()+8
-        while self.window.worker is not None and time.monotonic()<deadline:QTest.qWait(20)
-        self.assertIsNone(self.window.worker)
+    def value_row(self, field):
+        for row in range(self.window.parameter_table.rowCount()):
+            if self.window.parameter_table.item(row, 0).text() == field:
+                return row
+        self.fail(f"missing field {field}")
 
-    def test_designer_can_run_one_instruction_and_undo_whole_run(self):
-        self.run_offline_example()
-        self.assertTrue(self.window.engine.state['laid_out'])
-        self.assertEqual(len(self.window.engine.state['components']),11)
-        self.assertGreater(self.window.row_table.rowCount(),0)
-        self.assertFalse(self.window.details.isVisible())
-        self.window.undo()
-        self.assertFalse(self.window.engine.state['laid_out'])
-        self.assertEqual(self.window.engine.state['parameters'],{})
+    def test_single_window_has_no_drawing_canvas_or_tab_widget(self):
+        self.assertEqual(self.window.findChildren(QGraphicsView), [])
+        self.assertEqual(self.window.findChildren(QTabWidget), [])
+        self.assertIn("管板型式", self.window.stage_title.text())
+        self.assertGreater(self.window.parameter_table.rowCount(), 5)
 
-    def test_manual_layout_before_parameters_gives_plain_missing_message(self):
-        self.window.manual_layout()
-        self.assertFalse(self.window.engine.state['laid_out'])
-        self.assertIn('补充',self.window.status.text())
+    def test_failed_cell_is_red_and_shows_reason_and_recommendation(self):
+        self.window.session.current_stage_index = 1
+        self.window.render_stage()
+        row = self.value_row("换热管中心距 S")
+        self.window.parameter_table.item(row, 1).setText("20")
+        self.window.run_review()
+        color = self.window.parameter_table.item(row, 1).background().color()
+        self.assertEqual(color, QColor("#ffe0e0"))
+        self.assertIn("必须大于换热管外径", self.window.issue_text.toPlainText())
+        self.assertGreater(len(self.window.recommendation_buttons), 0)
+        self.assertFalse(self.window.confirm_button.isEnabled())
 
-    def test_workspace_omits_redundant_explanatory_headings(self):
-        visible_text='\n'.join(label.text() for label in self.window.findChildren(QLabel))
-        for removed in (
-            '参数、布管与元件布置', '布管与元件设计', '设计参数',
-            '告诉我你要怎么设计，我来依次完成。',
-            '可手动填参，也可以把设计要求交给右侧助手。',
-        ):
-            self.assertNotIn(removed,visible_text)
-        self.assertEqual(self.window.findChildren(QTabWidget),[])
+    def test_one_click_recommendation_requires_review_again(self):
+        self.window.session.current_stage_index = 1
+        self.window.render_stage()
+        row = self.value_row("换热管中心距 S")
+        self.window.parameter_table.item(row, 1).setText("20")
+        self.window.run_review()
+        button = next(b for b in self.window.recommendation_buttons if "32" in b.text())
+        button.click()
+        self.assertEqual(self.window.parameter_table.item(row, 1).text(), "32.0")
+        self.assertIn("请再次审核", self.window.review_status.text())
+        self.assertFalse(self.window.confirm_button.isEnabled())
+        self.window.run_review()
+        self.assertTrue(self.window.confirm_button.isEnabled())
 
-    def test_layout_uses_original_center_connections_and_component_colors(self):
-        self.run_offline_example()
-        items=self.window.canvas.scene().items()
-        blue_connections=[
-            item for item in items
-            if isinstance(item,QGraphicsLineItem)
-            and item.pen().color().name()=='#0000ff'
-        ]
-        self.assertGreater(len(blue_connections),100)
-        rectangle_colors=[
-            item.brush().color().name() for item in items
-            if isinstance(item,QGraphicsRectItem)
-        ]
-        self.assertEqual(rectangle_colors.count('#0000ff'),2)
-        self.assertEqual(rectangle_colors.count('#00008b'),1)
+    def test_review_pass_stays_unsaved_until_separate_confirmation(self):
+        self.window.run_review()
+        self.assertTrue(self.window.confirm_button.isEnabled())
+        self.assertIsNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
+        self.window.confirm_and_next()
+        self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
+        self.assertIn("布管与元件", self.window.stage_title.text())
 
 
-if __name__=='__main__':unittest.main()
+if __name__ == "__main__":
+    unittest.main()

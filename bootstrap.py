@@ -1,10 +1,23 @@
-"""Resolve the sibling source project without copying its database/UI/DLL stack."""
+"""Optional locator for the production source used only as a read-only reference."""
 import os
 from pathlib import Path
-import sys
 
-SOURCE = Path(os.environ.get('DONG_LANPEC_SOURCE') or Path(__file__).resolve().parent.parent / 'DongLanpec')
-if not (SOURCE / 'modules/buguan/buguan_ziyong/tube_pass/adapter.py').is_file():
-    raise RuntimeError('未找到同级DongLanpec工程，请把Demo与DongLanpec放在同一目录。')
-if str(SOURCE) not in sys.path:
-    sys.path.insert(0, str(SOURCE))
+
+def locate_source() -> Path | None:
+    configured = os.environ.get("DONG_LANPEC_SOURCE")
+    candidates = [Path(configured)] if configured else []
+    here = Path(__file__).resolve()
+    candidates.extend(parent / "DongLanpec" for parent in here.parents)
+    for candidate in candidates:
+        if candidate and (candidate / "modules/buguan/buguan_ziyong/My_Piping.py").is_file():
+            return candidate
+    return None
+
+
+SOURCE = locate_source()
+
+
+def require_source() -> Path:
+    if SOURCE is None:
+        raise RuntimeError("未找到 DongLanpec 工程；本 Demo 仍可独立运行，但不能打开源码参考。")
+    return SOURCE
