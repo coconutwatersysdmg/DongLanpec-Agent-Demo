@@ -82,6 +82,10 @@ class DesignWindow(QMainWindow):
         self.db_label = QLabel("独立演示数据库")
         self.db_label.setObjectName("safeBadge")
         header.addWidget(self.db_label)
+        self.review_toggle_button = QPushButton("查看审核")
+        self.review_toggle_button.setEnabled(False)
+        self.review_toggle_button.clicked.connect(self.toggle_review_drawer)
+        header.addWidget(self.review_toggle_button)
         history_button = QPushButton("历史方案")
         history_button.clicked.connect(self.open_history)
         header.addWidget(history_button)
@@ -137,8 +141,8 @@ class DesignWindow(QMainWindow):
         source_layout.addWidget(self.stop_button)
         layout.addWidget(source)
 
-        splitter = QSplitter(Qt.Horizontal)
-        layout.addWidget(splitter, 1)
+        self.splitter = QSplitter(Qt.Horizontal)
+        layout.addWidget(self.splitter, 1)
 
         chat_panel = QFrame()
         chat_panel.setObjectName("panel")
@@ -156,11 +160,11 @@ class DesignWindow(QMainWindow):
         send = QPushButton("发送备注")
         send.clicked.connect(self.send_note)
         chat_layout.addWidget(send, alignment=Qt.AlignRight)
-        splitter.addWidget(chat_panel)
+        self.splitter.addWidget(chat_panel)
 
-        review_panel = QFrame()
-        review_panel.setObjectName("panel")
-        review_layout = QVBoxLayout(review_panel)
+        self.review_panel = QFrame()
+        self.review_panel.setObjectName("panel")
+        review_layout = QVBoxLayout(self.review_panel)
         top = QHBoxLayout()
         self.stage_title = QLabel("尚未开始审核")
         self.stage_title.setObjectName("sectionTitle")
@@ -169,6 +173,9 @@ class DesignWindow(QMainWindow):
         self.review_status = QLabel("等待文件")
         self.review_status.setObjectName("statusBadge")
         top.addWidget(self.review_status)
+        collapse_review = QPushButton("收起审核")
+        collapse_review.clicked.connect(lambda: self.set_review_drawer_visible(False))
+        top.addWidget(collapse_review)
         review_layout.addLayout(top)
         self.stage_hint = QLabel("AI 会给出基础值、文件候选、来源证据和历史建议。你可以直接修改参数值。")
         self.stage_hint.setWordWrap(True)
@@ -215,8 +222,9 @@ class DesignWindow(QMainWindow):
         actions.addWidget(self.confirm_button)
         actions.addStretch()
         review_layout.addLayout(actions)
-        splitter.addWidget(review_panel)
-        splitter.setSizes((510, 920))
+        self.splitter.addWidget(self.review_panel)
+        self.splitter.setSizes((510, 920))
+        self.review_panel.hide()
 
     def _apply_style(self):
         self.setStyleSheet("""
@@ -244,6 +252,20 @@ class DesignWindow(QMainWindow):
             f'<div style="margin:7px 2px;padding:10px;border-radius:8px;background:{color};">'
             f'<b>{html.escape(label)}</b><br>{html.escape(str(message)).replace(chr(10), "<br>")}</div>'
         )
+
+    def set_review_drawer_visible(self, visible: bool) -> None:
+        if visible and self.session is not None:
+            self.review_panel.show()
+            self.splitter.setSizes((560, 920))
+            self.review_toggle_button.setText("收起审核")
+            self.review_toggle_button.setEnabled(True)
+            return
+        self.review_panel.hide()
+        self.review_toggle_button.setText("查看审核")
+        self.review_toggle_button.setEnabled(self.session is not None)
+
+    def toggle_review_drawer(self) -> None:
+        self.set_review_drawer_visible(self.review_panel.isHidden())
 
     def select_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "选择输入文件", "", "设计资料 (*.zip *.pdf *.xlsx *.xlsm *.doc *.docx);;所有文件 (*)")
@@ -305,6 +327,7 @@ class DesignWindow(QMainWindow):
             self.append_chat("assistant", f"有 {len(self.prepared.conflicts)} 条问题或冲突，已保留给你人工判断，不会自动覆盖参数。")
         self.review_button.setEnabled(True)
         self.render_stage()
+        self.set_review_drawer_visible(True)
 
     def _start_worker(self, fn, callback):
         if self.worker is not None and self.worker.isRunning():
@@ -486,6 +509,7 @@ class DesignWindow(QMainWindow):
             self.review_button.setEnabled(False)
             self.confirm_button.setEnabled(False)
             self._set_progress(6)
+            self.set_review_drawer_visible(False)
         else:
             self.render_stage()
 

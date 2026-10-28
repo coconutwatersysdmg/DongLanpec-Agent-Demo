@@ -36,6 +36,25 @@ class WindowTests(unittest.TestCase):
                 return row
         self.fail(f"missing field {field}")
 
+    def test_new_window_starts_with_chat_only_and_review_drawer_hidden(self):
+        fresh = DesignWindow(repository=self.repo)
+        try:
+            self.assertTrue(fresh.review_panel.isHidden())
+            self.assertFalse(fresh.review_toggle_button.isEnabled())
+        finally:
+            fresh.close()
+            fresh.deleteLater()
+
+    def test_prepared_design_opens_review_drawer_when_user_action_is_needed(self):
+        self.assertFalse(self.window.review_panel.isHidden())
+        self.assertTrue(self.window.review_toggle_button.isEnabled())
+
+    def test_collapsed_review_drawer_can_be_reopened_from_header(self):
+        self.window.set_review_drawer_visible(False)
+        self.assertTrue(self.window.review_panel.isHidden())
+        self.window.review_toggle_button.click()
+        self.assertFalse(self.window.review_panel.isHidden())
+
     def test_single_window_has_no_drawing_canvas_or_tab_widget(self):
         self.assertEqual(self.window.findChildren(QGraphicsView), [])
         self.assertEqual(self.window.findChildren(QTabWidget), [])
