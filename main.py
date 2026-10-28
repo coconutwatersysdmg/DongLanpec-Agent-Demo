@@ -25,7 +25,10 @@ def main():
             QFontDatabase.addApplicationFont(str(font))
     app.setFont(QFont("Microsoft YaHei", 10))
     window = DesignWindow()
-    window.show()
+    if args.screenshot:
+        window.show()
+    else:
+        window.showMaximized()
 
     if args.demo or args.screenshot:
         window.start_with_bundle(DocumentBundle([]), "E-1001", "AEU", 700)

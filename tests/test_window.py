@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QGraphicsView, QTabWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QGraphicsView, QSplitter, QTabWidget
 
 from ai_support.api_client import APIConfig
 from demo_db import DemoRepository
@@ -84,6 +84,14 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.findChildren(QTabWidget), [])
         self.assertIn("管板型式", self.window.stage_title.text())
         self.assertGreater(self.window.parameter_table.rowCount(), 5)
+
+    def test_codex_style_layout_is_wide_with_fixed_sidebar_and_inline_preview(self):
+        self.assertGreaterEqual(self.window.width(), 1760)
+        self.assertGreaterEqual(self.window.height(), 1040)
+        self.assertEqual(self.window.sidebar.minimumWidth(), 300)
+        self.assertEqual(self.window.sidebar.maximumWidth(), 300)
+        self.assertIs(self.window.review_panel.parentWidget(), self.window.main_panel)
+        self.assertEqual(self.window.findChildren(QSplitter), [])
 
     def test_failed_cell_is_red_and_shows_reason_and_recommendation(self):
         self.window.session.current_stage_index = 1

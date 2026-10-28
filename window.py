@@ -61,93 +61,87 @@ class DesignWindow(QMainWindow):
         self._worker_callback = None
         self._worker_cancelled = False
         self.setWindowTitle("管束 AI 审核助手 Demo")
-        self.resize(1540, 920)
-        self.setMinimumSize(1180, 720)
+        self.resize(1760, 1040)
+        self.setMinimumSize(1280, 760)
         self._build_ui()
         self._apply_style()
-        self.append_chat("assistant", "请先选择输入文件，或点击“使用示例输入包”。我会先识别设备，再准备四个管束审核阶段。")
+        self.append_chat("assistant", "点击左侧“开始管束设计”。")
 
     def _build_ui(self):
         root = QWidget()
         self.setCentralWidget(root)
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(10)
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        header = QHBoxLayout()
-        title = QLabel("管束 AI 审核助手")
-        title.setObjectName("mainTitle")
-        header.addWidget(title)
-        header.addStretch()
-        self.db_label = QLabel("Demo 安全模式")
-        self.db_label.setObjectName("safeBadge")
-        header.addWidget(self.db_label)
-        self.review_toggle_button = QPushButton("查看审核")
-        self.review_toggle_button.setEnabled(False)
-        self.review_toggle_button.clicked.connect(self.toggle_review_drawer)
-        header.addWidget(self.review_toggle_button)
-        history_button = QPushButton("历史方案")
-        history_button.clicked.connect(self.open_history)
-        header.addWidget(history_button)
-        settings_button = QPushButton("DeepSeek 设置")
-        settings_button.clicked.connect(self.open_settings)
-        header.addWidget(settings_button)
-        layout.addLayout(header)
-
-        self.progress_layout = QHBoxLayout()
-        self.progress_labels = []
-        for index, text in enumerate(("文件", "设备确认", *STAGES, "完成")):
-            label = QLabel(f"{index + 1}  {text}")
-            label.setObjectName("progressIdle")
-            label.setAlignment(Qt.AlignCenter)
-            self.progress_labels.append(label)
-            self.progress_layout.addWidget(label)
-        layout.addLayout(self.progress_layout)
-
-        self.splitter = QSplitter(Qt.Horizontal)
-        layout.addWidget(self.splitter, 1)
-
-        chat_panel = QFrame()
-        chat_panel.setObjectName("panel")
-        chat_layout = QVBoxLayout(chat_panel)
-        chat_header = QLabel("与管束 Agent 对话")
-        chat_header.setObjectName("sectionTitle")
-        chat_layout.addWidget(chat_header)
-        self.conversation = QTextBrowser()
-        self.conversation.setOpenExternalLinks(False)
-        chat_layout.addWidget(self.conversation, 1)
-
-        composer = QFrame()
-        composer.setObjectName("composer")
-        composer_layout = QVBoxLayout(composer)
-        composer_layout.setContentsMargins(12, 10, 12, 10)
-        composer_layout.setSpacing(8)
-        self.prompt = QPlainTextEdit()
-        self.prompt.setPlaceholderText("告诉管束 Agent 你的补充要求，或记录本次修改原因……")
-        self.prompt.setMaximumHeight(90)
-        composer_layout.addWidget(self.prompt)
-
-        file_actions = QHBoxLayout()
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(300)
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(22, 22, 22, 22)
+        sidebar_layout.setSpacing(8)
+        brand = QLabel("管束 AI")
+        brand.setObjectName("sidebarTitle")
+        sidebar_layout.addWidget(brand)
         self.start_design_button = QPushButton("开始管束设计")
-        self.start_design_button.setObjectName("primaryButton")
+        self.start_design_button.setObjectName("primarySideButton")
         self.start_design_button.clicked.connect(self.start_demo_design)
-        file_actions.addWidget(self.start_design_button)
-        file_actions.addStretch()
-        send = QPushButton("发送备注")
-        send.clicked.connect(self.send_note)
-        file_actions.addWidget(send)
-        composer_layout.addLayout(file_actions)
+        sidebar_layout.addWidget(self.start_design_button)
         self.stop_button = QPushButton("停止")
+        self.stop_button.setObjectName("sideAction")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop_background_task)
         self.stop_button.hide()
-        file_actions.insertWidget(file_actions.count() - 1, self.stop_button)
-        chat_layout.addWidget(composer)
-        self.splitter.addWidget(chat_panel)
+        sidebar_layout.addWidget(self.stop_button)
+        settings_label = QLabel("通用设置")
+        settings_label.setObjectName("sidebarSection")
+        sidebar_layout.addWidget(settings_label)
+        settings_button = QPushButton("AI 设置")
+        settings_button.setObjectName("sideAction")
+        settings_button.clicked.connect(self.open_settings)
+        sidebar_layout.addWidget(settings_button)
+        history_button = QPushButton("历史方案")
+        history_button.setObjectName("sideAction")
+        history_button.clicked.connect(self.open_history)
+        sidebar_layout.addWidget(history_button)
+        self.review_toggle_button = QPushButton("查看预览")
+        self.review_toggle_button.setObjectName("sideAction")
+        self.review_toggle_button.setEnabled(False)
+        self.review_toggle_button.clicked.connect(self.toggle_review_drawer)
+        sidebar_layout.addWidget(self.review_toggle_button)
+        progress_label = QLabel("设计进度")
+        progress_label.setObjectName("sidebarSection")
+        sidebar_layout.addWidget(progress_label)
+        self.progress_labels = []
+        for index, text in enumerate(STAGES):
+            label = QLabel(f"{index + 1}  {text}")
+            label.setObjectName("progressIdle")
+            self.progress_labels.append(label)
+            sidebar_layout.addWidget(label)
+        sidebar_layout.addStretch()
+        root_layout.addWidget(self.sidebar)
+
+        self.main_panel = QFrame()
+        self.main_panel.setObjectName("mainPanel")
+        main_layout = QVBoxLayout(self.main_panel)
+        main_layout.setContentsMargins(32, 22, 32, 22)
+        main_layout.setSpacing(12)
+        header = QHBoxLayout()
+        title = QLabel("管束设计")
+        title.setObjectName("mainTitle")
+        header.addWidget(title)
+        header.addStretch()
+        main_layout.addLayout(header)
+        self.conversation = QTextBrowser()
+        self.conversation.setObjectName("conversation")
+        self.conversation.setOpenExternalLinks(False)
+        main_layout.addWidget(self.conversation, 2)
 
         self.review_panel = QFrame()
-        self.review_panel.setObjectName("panel")
+        self.review_panel.setObjectName("reviewCard")
         review_layout = QVBoxLayout(self.review_panel)
+        review_layout.setContentsMargins(18, 14, 18, 14)
+        review_layout.setSpacing(8)
         top = QHBoxLayout()
         self.stage_title = QLabel("尚未开始审核")
         self.stage_title.setObjectName("sectionTitle")
@@ -156,11 +150,11 @@ class DesignWindow(QMainWindow):
         self.review_status = QLabel("等待文件")
         self.review_status.setObjectName("statusBadge")
         top.addWidget(self.review_status)
-        collapse_review = QPushButton("收起审核")
+        collapse_review = QPushButton("收起预览")
         collapse_review.clicked.connect(lambda: self.set_review_drawer_visible(False))
         top.addWidget(collapse_review)
         review_layout.addLayout(top)
-        self.stage_hint = QLabel("AI 会给出基础值、文件候选、来源证据和历史建议。你可以直接修改参数值。")
+        self.stage_hint = QLabel("检查并修改参数。")
         self.stage_hint.setWordWrap(True)
         review_layout.addWidget(self.stage_hint)
 
@@ -205,27 +199,52 @@ class DesignWindow(QMainWindow):
         actions.addWidget(self.confirm_button)
         actions.addStretch()
         review_layout.addLayout(actions)
-        self.splitter.addWidget(self.review_panel)
-        self.splitter.setSizes((510, 920))
+        main_layout.addWidget(self.review_panel, 3)
         self.review_panel.hide()
+
+        composer = QFrame()
+        composer.setObjectName("composer")
+        composer_layout = QVBoxLayout(composer)
+        composer_layout.setContentsMargins(14, 12, 14, 10)
+        composer_layout.setSpacing(6)
+        self.prompt = QPlainTextEdit()
+        self.prompt.setPlaceholderText("输入要求……")
+        self.prompt.setMaximumHeight(100)
+        composer_layout.addWidget(self.prompt)
+        send_row = QHBoxLayout()
+        send_row.addStretch()
+        send = QPushButton("发送")
+        send.setObjectName("sendButton")
+        send.clicked.connect(self.send_note)
+        send_row.addWidget(send)
+        composer_layout.addLayout(send_row)
+        main_layout.addWidget(composer)
+        root_layout.addWidget(self.main_panel, 1)
 
     def _apply_style(self):
         self.setStyleSheet("""
-        QMainWindow, QWidget { background:#f5f7fa; color:#1e293b; font-family:'Microsoft YaHei'; font-size:13px; }
-        #mainTitle { font-size:24px; font-weight:700; color:#173b6c; }
-        #sectionTitle { font-size:18px; font-weight:700; color:#173b6c; }
-        #subTitle { font-size:14px; font-weight:700; color:#334155; }
-        #panel { background:white; border:1px solid #d9e1ec; border-radius:10px; }
-        #composer { background:#f8fafc; border:1px solid #cfd8e5; border-radius:10px; }
-        QPushButton { background:#fff; border:1px solid #b8c6d9; border-radius:5px; padding:7px 13px; }
-        QPushButton:hover { border-color:#2d64a8; background:#f2f7fd; }
-        QPushButton:disabled { color:#94a3b8; background:#edf1f5; }
-        #primaryButton { background:#2368a8; color:white; border-color:#2368a8; font-weight:600; }
-        #safeBadge { background:#e8f7ef; color:#276749; border:1px solid #9bd3b4; border-radius:10px; padding:5px 10px; }
+        QMainWindow, QWidget { background:#f7f7f5; color:#202124; font-family:'Microsoft YaHei'; font-size:14px; }
+        #sidebar { background:#f2f2ee; border-right:1px solid #deded8; }
+        #sidebarTitle { font-size:25px; font-weight:700; padding:8px 4px 18px 4px; }
+        #sidebarSection { color:#777772; font-weight:600; padding:22px 6px 6px 6px; }
+        #mainPanel { background:#ffffff; }
+        #mainTitle { font-size:22px; font-weight:700; padding:5px 0 12px 0; }
+        #sectionTitle { font-size:18px; font-weight:700; }
+        #subTitle { font-size:14px; font-weight:700; color:#444; }
+        #conversation { background:#ffffff; border:none; padding:6px; }
+        #reviewCard { background:#ffffff; border:1px solid #deded8; border-radius:14px; }
+        #composer { background:#ffffff; border:1px solid #d8d8d2; border-radius:16px; }
+        QPushButton { background:#fff; border:1px solid #d0d0ca; border-radius:8px; padding:8px 14px; }
+        QPushButton:hover { background:#f3f3ef; }
+        QPushButton:disabled { color:#aaa; background:#f3f3f0; }
+        #sideAction { text-align:left; border:none; background:transparent; padding:10px 12px; }
+        #sideAction:hover { background:#e7e7e2; }
+        #primarySideButton { text-align:left; background:#e7e7e2; border:none; font-weight:600; padding:11px 12px; }
+        #primaryButton, #sendButton { background:#2368a8; color:white; border-color:#2368a8; font-weight:600; }
         #statusBadge { background:#fff4d6; color:#805b10; border:1px solid #e1c36d; border-radius:10px; padding:5px 10px; }
-        QLabel#progressIdle { background:#eaf0f8; color:#5c6d82; border-radius:8px; padding:7px 6px; }
-        QTextBrowser, QPlainTextEdit, QTableWidget, QComboBox, QDoubleSpinBox { background:white; border:1px solid #cfd8e5; border-radius:5px; }
-        QHeaderView::section { background:#eaf0f8; color:#29415f; padding:7px; border:none; border-right:1px solid #d7e0eb; }
+        QLabel#progressIdle { color:#696964; border-radius:8px; padding:8px 12px; }
+        QPlainTextEdit, QTableWidget { background:white; border:1px solid #d8d8d2; border-radius:6px; }
+        QHeaderView::section { background:#f1f1ed; color:#333; padding:8px; border:none; border-right:1px solid #deded8; }
         QTableWidget::item { padding:5px; }
         """)
 
@@ -240,12 +259,11 @@ class DesignWindow(QMainWindow):
     def set_review_drawer_visible(self, visible: bool) -> None:
         if visible and self.session is not None:
             self.review_panel.show()
-            self.splitter.setSizes((560, 920))
-            self.review_toggle_button.setText("收起审核")
+            self.review_toggle_button.setText("收起预览")
             self.review_toggle_button.setEnabled(True)
             return
         self.review_panel.hide()
-        self.review_toggle_button.setText("查看审核")
+        self.review_toggle_button.setText("查看预览")
         self.review_toggle_button.setEnabled(self.session is not None and self.session.status != "已完成")
 
     def toggle_review_drawer(self) -> None:
@@ -309,8 +327,7 @@ class DesignWindow(QMainWindow):
     def _accept_prepared(self, prepared):
         self.prepared = prepared
         self.session = ReviewSession(prepared, self.repository)
-        for row in self.prepared.trace:
-            self.append_chat("assistant", row["message"])
+        self.append_chat("assistant", "预览已生成，请审核。")
         if self.prepared.conflicts:
             self.append_chat("assistant", f"有 {len(self.prepared.conflicts)} 条问题或冲突，已保留给你人工判断，不会自动覆盖参数。")
         self.review_button.setEnabled(True)
@@ -382,7 +399,7 @@ class DesignWindow(QMainWindow):
             self.parameter_table.blockSignals(signals_were_blocked)
         self.confirm_button.setEnabled(self.session.status == "审核通过待确认")
         self.previous_button.setEnabled(self.session.current_stage_index > 0)
-        self._set_progress(2 + self.session.current_stage_index)
+        self._set_progress(self.session.current_stage_index)
 
     def on_table_item_changed(self, item):
         if self._updating_table or self.session is None or item.column() != 1:
@@ -496,7 +513,7 @@ class DesignWindow(QMainWindow):
             self.issue_text.setPlainText(f"设计 #{self.session.design_id} 已完成。所有阶段均经过规则审核和人工确认。")
             self.review_button.setEnabled(False)
             self.confirm_button.setEnabled(False)
-            self._set_progress(6)
+            self._set_progress(len(self.progress_labels))
             self.set_review_drawer_visible(False)
         else:
             self.render_stage()
