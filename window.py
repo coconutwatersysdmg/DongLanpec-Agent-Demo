@@ -163,36 +163,34 @@ class DesignWindow(QMainWindow):
         self.parameter_table.itemChanged.connect(self.on_table_item_changed)
         review_layout.addWidget(self.parameter_table, 1)
 
-        issue_header = QLabel("审核结果")
+        self.issue_container = QFrame()
+        self.issue_container.setObjectName("issueContainer")
+        issue_layout = QVBoxLayout(self.issue_container)
+        issue_layout.setContentsMargins(0, 0, 0, 0)
+        issue_layout.setSpacing(8)
+        issue_header = QLabel("需要修改")
         issue_header.setObjectName("subTitle")
-        review_layout.addWidget(issue_header)
+        issue_layout.addWidget(issue_header)
         self.issue_text = QPlainTextEdit()
         self.issue_text.setReadOnly(True)
         self.issue_text.setMaximumHeight(100)
-        self.issue_text.setPlaceholderText("点击“审核本阶段”后显示结果。")
-        review_layout.addWidget(self.issue_text)
+        issue_layout.addWidget(self.issue_text)
         self.recommendation_widget = QWidget()
         self.recommendation_layout = QHBoxLayout(self.recommendation_widget)
         self.recommendation_layout.setContentsMargins(0, 0, 0, 0)
         self.recommendation_layout.addStretch()
-        review_layout.addWidget(self.recommendation_widget)
+        issue_layout.addWidget(self.recommendation_widget)
+        review_layout.addWidget(self.issue_container)
+        self.issue_container.hide()
 
-        actions = QHBoxLayout()
-        self.previous_button = QPushButton("返回上一阶段")
-        self.previous_button.clicked.connect(self.go_previous_stage)
-        self.previous_button.setEnabled(False)
-        actions.addWidget(self.previous_button)
-        self.review_button = QPushButton("审核本阶段")
-        self.review_button.setObjectName("primaryButton")
-        self.review_button.clicked.connect(self.run_review)
-        self.review_button.setEnabled(False)
-        actions.addWidget(self.review_button)
-        self.confirm_button = QPushButton("确认并进入下一步")
-        self.confirm_button.clicked.connect(self.confirm_and_next)
-        self.confirm_button.setEnabled(False)
-        actions.addWidget(self.confirm_button)
-        actions.addStretch()
-        review_layout.addLayout(actions)
+        self.review_actions = QHBoxLayout()
+        self.review_actions.addStretch()
+        self.save_button = QPushButton("保留")
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.clicked.connect(self.save_current_stage)
+        self.save_button.setEnabled(False)
+        self.review_actions.addWidget(self.save_button)
+        review_layout.addLayout(self.review_actions)
         main_layout.addWidget(self.review_panel, 3)
         self.review_panel.hide()
 
@@ -283,7 +281,7 @@ class DesignWindow(QMainWindow):
         self.append_chat("assistant", "预览已生成，请审核。")
         if self.prepared.conflicts:
             self.append_chat("assistant", f"有 {len(self.prepared.conflicts)} 条问题或冲突，已保留给你人工判断，不会自动覆盖参数。")
-        self.review_button.setEnabled(True)
+        self.save_button.setEnabled(True)
         self.render_stage()
         self.set_review_drawer_visible(True)
 
@@ -350,8 +348,7 @@ class DesignWindow(QMainWindow):
         finally:
             self._updating_table = False
             self.parameter_table.blockSignals(signals_were_blocked)
-        self.confirm_button.setEnabled(self.session.status == "审核通过待确认")
-        self.previous_button.setEnabled(self.session.current_stage_index > 0)
+        self.save_button.setEnabled(True)
         self._set_progress(self.session.current_stage_index)
 
     def on_table_item_changed(self, item):
@@ -377,32 +374,35 @@ class DesignWindow(QMainWindow):
             QMessageBox.warning(self, "不能修改", str(exc))
             self.render_stage()
             return
-        self.review_status.setText("待审核")
-        self.review_status.setStyleSheet("background:#fff4d6;color:#805b10;padding:5px 10px;border-radius:10px;")
-        self.issue_text.setPlainText("参数已修改。请点击“审核本阶段”。")
-        self.confirm_button.setEnabled(False)
+        self.review_status.setText("已修改")
+        self.issue_container.hide()
         self._clear_recommendation_buttons()
 
-    def run_review(self):
+    def save_current_stage(self):
         if self.session is None:
             return
         result = self.session.run_review()
         self.render_stage()
-        if result.passed:
-            warning_text = "\n".join(f"注意：{item}" for item in result.coverage_warnings)
-            self.issue_text.setPlainText("Demo 已覆盖的规则审核通过。请检查内容；确认无误后点击“确认并进入下一步”。\n" + warning_text)
-            self.review_status.setText("审核通过，等待你确认")
-            self.review_status.setStyleSheet("background:#e8f7ef;color:#276749;padding:5px 10px;border-radius:10px;")
-            self.confirm_button.setEnabled(True)
-            self.append_chat("assistant", f"{self.session.current_stage}规则审核通过，但尚未保存。等待你确认后才进入下一步。")
-        else:
+        if not result.passed:
             self._show_issues(result.issues)
-            self.review_status.setText(f"审核不通过 · {len(result.issues)} 项")
+            self.review_status.setText(f"需要修改 · {len(result.issues)} 项")
             self.review_status.setStyleSheet("background:#ffe8e8;color:#9b2c2c;padding:5px 10px;border-radius:10px;")
-            self.confirm_button.setEnabled(False)
-            self.append_chat("assistant", f"{self.session.current_stage}有 {len(result.issues)} 项未通过。红色参数旁已给出原因和推荐值。")
+            self.append_chat("assistant", f"{self.session.current_stage}有 {len(result.issues)} 项需要修改。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "确认保留",
+            f"确认保留“{self.session.current_stage}”的当前参数吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            self.review_status.setText("未保留")
+            return
+        self.confirm_and_next()
 
     def _show_issues(self, issues):
+        self.issue_container.show()
         lines = []
         self.recommendation_buttons = []
         for issue in issues:
@@ -428,8 +428,7 @@ class DesignWindow(QMainWindow):
     def acknowledge_conflicts(self):
         if self.session and self.session.acknowledge_conflicts():
             self.render_stage()
-            self.review_status.setText("冲突已确认，请再次审核")
-            self.issue_text.setPlainText("已记录你对本阶段冲突的人工处理。请再次点击“审核本阶段”。")
+            self.review_status.setText("冲突已处理")
 
     def apply_recommendation(self, issue_id):
         try:
@@ -438,9 +437,7 @@ class DesignWindow(QMainWindow):
             QMessageBox.warning(self, "无法采用", str(exc))
             return
         self.render_stage()
-        self.review_status.setText("已填入推荐值，请再次审核")
-        self.issue_text.setPlainText("推荐值已填入。为防止错误数据直接通过，请再次点击“审核本阶段”。")
-        self.confirm_button.setEnabled(False)
+        self.review_status.setText("已填入推荐值")
 
     def confirm_and_next(self):
         if self.session is None:
@@ -453,8 +450,9 @@ class DesignWindow(QMainWindow):
             return
         except sqlite3.Error as exc:
             self.review_status.setText("保存失败，可重试")
-            self.issue_text.setPlainText(f"保存失败：{exc}\n审核结果仍保留，请检查磁盘/数据库后再次点击确认。")
-            self.confirm_button.setEnabled(True)
+            self.issue_container.show()
+            self.issue_text.setPlainText(f"保存失败：{exc}\n请检查磁盘或数据库后再次点击保留。")
+            self.save_button.setEnabled(True)
             self.append_chat("assistant", f"独立演示数据库保存失败，可重试：{exc}")
             QMessageBox.warning(self, "保存失败", str(exc))
             return
@@ -464,8 +462,7 @@ class DesignWindow(QMainWindow):
             self.review_status.setText("已完成并保存")
             self.parameter_table.setRowCount(0)
             self.issue_text.setPlainText(f"设计 #{self.session.design_id} 已完成。所有阶段均经过规则审核和人工确认。")
-            self.review_button.setEnabled(False)
-            self.confirm_button.setEnabled(False)
+            self.save_button.setEnabled(False)
             self._set_progress(len(self.progress_labels))
             self.set_review_drawer_visible(False)
         else:
@@ -554,6 +551,7 @@ class DesignWindow(QMainWindow):
         try:
             self._clear_recommendation_buttons()
             self.issue_text.clear()
+            self.issue_container.hide()
             for row in range(self.parameter_table.rowCount()):
                 item = self.parameter_table.item(row, 1)
                 if item:
@@ -597,9 +595,7 @@ class DesignWindow(QMainWindow):
                 return False
             self.render_stage()
             self.set_review_drawer_visible(True)
-            self.issue_text.setPlainText("参数已修改，请重新审核。")
-            self.confirm_button.setEnabled(False)
-            self.append_chat("assistant", f"已将 {field} 改为 {value}，请在预览中审核。")
+            self.append_chat("assistant", f"已将 {field} 改为 {value}，确认无误后点击保留。")
             return True
         return False
 

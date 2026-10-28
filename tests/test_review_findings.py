@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from ai_support.api_client import parse_fact_payload
 from demo_db import DemoRepository
@@ -126,17 +126,16 @@ class ReviewerRegressionTests(unittest.TestCase):
     def test_gui_database_failure_is_readable_and_retryable(self):
         window = DesignWindow(repository=self.repo)
         window.start_with_bundle(DocumentBundle([]), "E-1001", "AEU", 700)
-        window.run_review()
-        with patch.object(self.repo, "save_stage", side_effect=sqlite3.OperationalError("disk full")), patch("window.QMessageBox.warning"):
-            window.confirm_and_next()
+        with patch.object(self.repo, "save_stage", side_effect=sqlite3.OperationalError("disk full")), patch("window.QMessageBox.warning"), patch("window.QMessageBox.question", return_value=QMessageBox.Yes):
+            window.save_current_stage()
         self.assertIn("保存失败", window.issue_text.toPlainText())
-        self.assertTrue(window.confirm_button.isEnabled())
+        self.assertTrue(window.save_button.isEnabled())
         window.close()
 
-    def test_ui_exposes_stop_and_previous_stage_controls(self):
+    def test_ui_exposes_stop_and_save_controls(self):
         window = DesignWindow(repository=self.repo)
         self.assertTrue(hasattr(window, "stop_button"))
-        self.assertTrue(hasattr(window, "previous_button"))
+        self.assertTrue(hasattr(window, "save_button"))
         window.close()
 
 

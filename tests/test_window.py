@@ -4,9 +4,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QGraphicsView, QSplitter, QTabWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QGraphicsView, QMessageBox, QSplitter, QTabWidget
 
 from ai_support.api_client import APIConfig
 from demo_db import DemoRepository
@@ -76,7 +77,7 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(self.window.session.current_parameters["换热管中心距 S"]["value"], 34)
         self.assertEqual(self.window.session.status, "待审核")
-        self.assertFalse(self.window.confirm_button.isEnabled())
+        self.assertTrue(self.window.save_button.isEnabled())
 
     def test_prepared_design_opens_review_drawer_when_user_action_is_needed(self):
         self.assertFalse(self.window.review_panel.isHidden())
@@ -102,45 +103,71 @@ class WindowTests(unittest.TestCase):
         self.assertIs(self.window.review_panel.parentWidget(), self.window.main_panel)
         self.assertEqual(self.window.findChildren(QSplitter), [])
 
+    def test_preview_exposes_one_save_action(self):
+        self.assertEqual(self.window.save_button.text(), "保留")
+        self.assertEqual(self.window.review_actions.count(), 2)  # button plus trailing stretch
+
+    def test_save_with_invalid_value_marks_error_without_confirmation_or_database_write(self):
+        self.window.session.current_stage_index = 1
+        self.window.render_stage()
+        row = self.value_row("换热管中心距 S")
+        self.window.parameter_table.item(row, 1).setText("20")
+
+        with patch.object(QMessageBox, "question") as question:
+            self.window.save_current_stage()
+
+        question.assert_not_called()
+        self.assertEqual(
+            self.window.parameter_table.item(row, 1).background().color(),
+            QColor("#ffe0e0"),
+        )
+        self.assertIsNone(self.repo.load_stage(self.window.session.design_id, "布管与元件"))
+        self.assertEqual(self.window.session.current_stage, "布管与元件")
+
+    def test_save_confirmation_writes_stage_and_advances(self):
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.window.save_current_stage()
+
+        self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
+        self.assertEqual(self.window.session.current_stage, "布管与元件")
+
+    def test_cancel_save_confirmation_keeps_stage_unsaved(self):
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.No):
+            self.window.save_current_stage()
+
+        self.assertIsNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
+        self.assertEqual(self.window.session.current_stage, "管板型式")
+
     def test_failed_cell_is_red_and_shows_reason_and_recommendation(self):
         self.window.session.current_stage_index = 1
         self.window.render_stage()
         row = self.value_row("换热管中心距 S")
         self.window.parameter_table.item(row, 1).setText("20")
-        self.window.run_review()
+        self.window.save_current_stage()
         color = self.window.parameter_table.item(row, 1).background().color()
         self.assertEqual(color, QColor("#ffe0e0"))
         self.assertIn("必须大于换热管外径", self.window.issue_text.toPlainText())
         self.assertGreater(len(self.window.recommendation_buttons), 0)
-        self.assertFalse(self.window.confirm_button.isEnabled())
+        self.assertTrue(self.window.save_button.isEnabled())
 
     def test_one_click_recommendation_requires_review_again(self):
         self.window.session.current_stage_index = 1
         self.window.render_stage()
         row = self.value_row("换热管中心距 S")
         self.window.parameter_table.item(row, 1).setText("20")
-        self.window.run_review()
+        self.window.save_current_stage()
         button = next(b for b in self.window.recommendation_buttons if "32" in b.text())
         button.click()
         self.assertEqual(self.window.parameter_table.item(row, 1).text(), "32.0")
-        self.assertIn("请再次审核", self.window.review_status.text())
-        self.assertFalse(self.window.confirm_button.isEnabled())
-        self.window.run_review()
-        self.assertTrue(self.window.confirm_button.isEnabled())
-
-    def test_review_pass_stays_unsaved_until_separate_confirmation(self):
-        self.window.run_review()
-        self.assertTrue(self.window.confirm_button.isEnabled())
-        self.assertIsNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
-        self.window.confirm_and_next()
-        self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
-        self.assertIn("布管与元件", self.window.stage_title.text())
+        self.assertEqual(self.window.session.status, "待审核")
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.window.save_current_stage()
+        self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "布管与元件"))
 
     def test_completed_design_returns_to_chat_and_disables_empty_review_drawer(self):
-        for _ in range(4):
-            self.window.run_review()
-            self.assertTrue(self.window.confirm_button.isEnabled())
-            self.window.confirm_and_next()
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            for _ in range(4):
+                self.window.save_current_stage()
         self.assertTrue(self.window.review_panel.isHidden())
         self.assertFalse(self.window.review_toggle_button.isEnabled())
 
