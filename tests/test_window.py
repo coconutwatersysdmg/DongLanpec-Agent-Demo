@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QApplication, QGraphicsView, QTabWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QGraphicsView, QTabWidget
 
+from ai_support.api_client import APIConfig
 from demo_db import DemoRepository
 from document_reader import DocumentBundle
 from window import DesignWindow
@@ -41,6 +42,29 @@ class WindowTests(unittest.TestCase):
         try:
             self.assertTrue(fresh.review_panel.isHidden())
             self.assertFalse(fresh.review_toggle_button.isEnabled())
+        finally:
+            fresh.close()
+            fresh.deleteLater()
+
+    def test_main_window_requires_no_manual_context_inputs(self):
+        fresh = DesignWindow(repository=self.repo)
+        try:
+            self.assertEqual(fresh.findChildren(QComboBox), [])
+            self.assertEqual(fresh.findChildren(QDoubleSpinBox), [])
+            self.assertEqual(fresh.start_design_button.text(), "开始管束设计")
+        finally:
+            fresh.close()
+            fresh.deleteLater()
+
+    def test_start_design_uses_hidden_demo_context_and_opens_real_preview(self):
+        fresh = DesignWindow(repository=self.repo)
+        fresh.config = APIConfig(api_key="")
+        try:
+            fresh.start_demo_design()
+            self.assertIsNotNone(fresh.session)
+            self.assertEqual(fresh.prepared.base_context["管板型式"]["产品型式"]["value"], "AEU")
+            self.assertFalse(fresh.review_panel.isHidden())
+            self.assertGreater(fresh.parameter_table.rowCount(), 5)
         finally:
             fresh.close()
             fresh.deleteLater()
