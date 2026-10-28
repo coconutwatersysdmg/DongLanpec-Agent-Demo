@@ -6,8 +6,8 @@ import re
 from urllib import request, error
 import bootstrap
 from engine import FIELDS, EXAMPLE_TEXT, example_parameters, example_components
-from modules.buguan.buguan_ziyong.ai_assistant.extraction import PREVIEW_REQUIRED
-from modules.buguan.buguan_ziyong.ai_assistant.api_client import APIConfig
+from ai_support.extraction import PREVIEW_REQUIRED
+from ai_support.api_client import APIConfig
 
 
 def tool(name,description,properties=None,required=None):

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import bootstrap
-from modules.buguan.buguan_ziyong.ai_assistant.api_client import APIConfig, BAILIAN_BASE_URL
+from ai_support.api_client import APIConfig, BAILIAN_BASE_URL
 
 CONFIG_PATH=Path(os.environ.get('APPDATA') or Path.home())/'DongLanpecAgentDemo'/'settings.json'
 

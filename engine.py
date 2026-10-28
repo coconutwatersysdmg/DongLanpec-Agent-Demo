@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import math
 import bootstrap
-from modules.buguan.buguan_ziyong.ai_assistant.extraction import (
+from ai_support.extraction import (
     FIELDS, SAMPLE_TEXT, SAMPLE_RESPONSE, validate_extraction, preview_layout,
 )
 

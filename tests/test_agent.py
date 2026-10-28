@@ -4,7 +4,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from agent import AgentRunner, ScriptedProvider, BailianProvider
 from engine import DesignEngine, EXAMPLE_TEXT
-from modules.buguan.buguan_ziyong.ai_assistant.api_client import APIConfig
+from ai_support.api_client import APIConfig
 
 
 class AgentTests(unittest.TestCase):

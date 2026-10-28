@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtTest import QTest
 from window import DesignWindow
 from engine import EXAMPLE_TEXT
-from modules.buguan.buguan_ziyong.ai_assistant.api_client import APIConfig
+from ai_support.api_client import APIConfig
 
 
 class WindowTests(unittest.TestCase):

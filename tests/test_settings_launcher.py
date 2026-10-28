@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from settings import save_settings,load_settings
-from modules.buguan.buguan_ziyong.ai_assistant.api_client import APIConfig
+from ai_support.api_client import APIConfig
 
 
 @unittest.skipUnless(os.name=='nt','Windows launcher and account encryption')
