@@ -95,6 +95,14 @@ class WindowTests(unittest.TestCase):
         self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
         self.assertIn("布管与元件", self.window.stage_title.text())
 
+    def test_completed_design_returns_to_chat_and_disables_empty_review_drawer(self):
+        for _ in range(4):
+            self.window.run_review()
+            self.assertTrue(self.window.confirm_button.isEnabled())
+            self.window.confirm_and_next()
+        self.assertTrue(self.window.review_panel.isHidden())
+        self.assertFalse(self.window.review_toggle_button.isEnabled())
+
 
 if __name__ == "__main__":
     unittest.main()

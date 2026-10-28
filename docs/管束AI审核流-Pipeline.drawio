@@ -288,11 +288,25 @@
         <mxCell id="x10" value="手工修改 / 一键采用推荐值后重新审核" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#D6A545;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="needs" target="review">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="x11" value="数据读取 / 模型 / 写库失败" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#C95B5B;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="running" target="error">
+        <mxCell id="x11" value="数据读取 / 模型失败" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#C95B5B;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="running" target="error">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="x12" value="重试" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="error" target="running">
           <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="saveError" value="写库失败&#xa;事务已回滚" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF0F0;strokeColor=#C95B5B;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="q1">
+          <mxGeometry x="1060" y="700" width="150" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="x13" value="写库失败" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#C95B5B;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="saveState" target="saveError">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="x14" value="重试入库" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2D4E91;strokeWidth=2;dashed=1;endArrow=block;fontSize=14;" edge="1" parent="q1" source="saveError" target="saveState">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1250" y="740" />
+              <mxPoint x="1250" y="600" />
+            </Array>
+          </mxGeometry>
         </mxCell>
         <mxCell id="note" value="关键规则：人工修改会撤销当前阶段“已通过”；修改上游阶段会使依赖的下游审核失效。写库失败则整个事务回滚。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3F6FA;strokeColor=#AAB6C5;fontSize=17;fontColor=#26364D;align=left;spacingLeft=18;" vertex="1" parent="q1">
           <mxGeometry x="390" y="850" width="900" height="95" as="geometry" />

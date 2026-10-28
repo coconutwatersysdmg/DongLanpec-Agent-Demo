@@ -271,7 +271,7 @@ class DesignWindow(QMainWindow):
             return
         self.review_panel.hide()
         self.review_toggle_button.setText("查看审核")
-        self.review_toggle_button.setEnabled(self.session is not None)
+        self.review_toggle_button.setEnabled(self.session is not None and self.session.status != "已完成")
 
     def toggle_review_drawer(self) -> None:
         self.set_review_drawer_visible(self.review_panel.isHidden())
