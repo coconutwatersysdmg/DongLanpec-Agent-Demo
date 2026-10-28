@@ -138,6 +138,39 @@ class WindowTests(unittest.TestCase):
         self.assertIsNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
         self.assertEqual(self.window.session.current_stage, "管板型式")
 
+    def test_saved_stage_can_be_reopened_from_sidebar(self):
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.window.save_current_stage()
+
+        self.window.stage_buttons[0].click()
+
+        self.assertEqual(self.window.session.current_stage, "管板型式")
+        self.assertIn("管板型式", self.window.stage_title.text())
+
+    def test_unreached_stages_are_disabled_in_sidebar(self):
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.window.save_current_stage()
+
+        self.assertTrue(self.window.stage_buttons[0].isEnabled())
+        self.assertTrue(self.window.stage_buttons[1].isEnabled())
+        self.assertFalse(self.window.stage_buttons[2].isEnabled())
+        self.assertFalse(self.window.stage_buttons[3].isEnabled())
+
+    def test_editing_reopened_stage_invalidates_it_and_downstream_snapshots(self):
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+            self.window.save_current_stage()
+            self.window.save_current_stage()
+        self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
+        self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "布管与元件"))
+
+        self.window.open_stage(0)
+        row = self.value_row("R1")
+        self.window.parameter_table.item(row, 1).setText("13")
+
+        self.assertIsNone(self.repo.load_stage(self.window.session.design_id, "管板型式"))
+        self.assertIsNone(self.repo.load_stage(self.window.session.design_id, "布管与元件"))
+        self.assertEqual(self.window.session.current_stage, "管板型式")
+
     def test_failed_cell_is_red_and_shows_reason_and_recommendation(self):
         self.window.session.current_stage_index = 1
         self.window.render_stage()
@@ -164,12 +197,14 @@ class WindowTests(unittest.TestCase):
             self.window.save_current_stage()
         self.assertIsNotNone(self.repo.load_stage(self.window.session.design_id, "布管与元件"))
 
-    def test_completed_design_returns_to_chat_and_disables_empty_review_drawer(self):
+    def test_completed_design_keeps_reachable_stage_preview_available(self):
         with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
             for _ in range(4):
                 self.window.save_current_stage()
-        self.assertTrue(self.window.review_panel.isHidden())
-        self.assertFalse(self.window.review_toggle_button.isEnabled())
+        self.assertFalse(self.window.review_panel.isHidden())
+        self.assertTrue(all(button.isEnabled() for button in self.window.stage_buttons))
+        self.window.stage_buttons[0].click()
+        self.assertEqual(self.window.session.current_stage, "管板型式")
 
 
 if __name__ == "__main__":

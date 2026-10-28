@@ -106,12 +106,15 @@ class DesignWindow(QMainWindow):
         progress_label = QLabel("设计进度")
         progress_label.setObjectName("sidebarSection")
         sidebar_layout.addWidget(progress_label)
-        self.progress_labels = []
+        self.stage_buttons = []
         for index, text in enumerate(STAGES):
-            label = QLabel(f"{index + 1}  {text}")
-            label.setObjectName("progressIdle")
-            self.progress_labels.append(label)
-            sidebar_layout.addWidget(label)
+            button = QPushButton(f"{index + 1}  {text}")
+            button.setObjectName("stageButton")
+            button.clicked.connect(lambda _checked=False, stage_index=index: self.open_stage(stage_index))
+            button.setEnabled(False)
+            self.stage_buttons.append(button)
+            sidebar_layout.addWidget(button)
+        self.progress_labels = self.stage_buttons
         sidebar_layout.addStretch()
         root_layout.addWidget(self.sidebar)
 
@@ -256,7 +259,7 @@ class DesignWindow(QMainWindow):
             return
         self.review_panel.hide()
         self.review_toggle_button.setText("查看预览")
-        self.review_toggle_button.setEnabled(self.session is not None and self.session.status != "已完成")
+        self.review_toggle_button.setEnabled(self.session is not None)
 
     def toggle_review_drawer(self) -> None:
         self.set_review_drawer_visible(self.review_panel.isHidden())
@@ -350,6 +353,16 @@ class DesignWindow(QMainWindow):
             self.parameter_table.blockSignals(signals_were_blocked)
         self.save_button.setEnabled(True)
         self._set_progress(self.session.current_stage_index)
+
+    def open_stage(self, index: int) -> None:
+        if self.session is None or not 0 <= index < len(STAGES):
+            return
+        try:
+            self.session.go_to_stage(index)
+        except ValueError:
+            return
+        self.render_stage()
+        self.set_review_drawer_visible(True)
 
     def on_table_item_changed(self, item):
         if self._updating_table or self.session is None or item.column() != 1:
@@ -458,13 +471,11 @@ class DesignWindow(QMainWindow):
             return
         self.append_chat("assistant", f"你已确认“{stage}”，审核快照已写入独立演示数据库。")
         if result == "已完成":
-            self.stage_title.setText("四个阶段全部完成")
+            self.render_stage()
             self.review_status.setText("已完成并保存")
-            self.parameter_table.setRowCount(0)
-            self.issue_text.setPlainText(f"设计 #{self.session.design_id} 已完成。所有阶段均经过规则审核和人工确认。")
             self.save_button.setEnabled(False)
             self._set_progress(len(self.progress_labels))
-            self.set_review_drawer_visible(False)
+            self.set_review_drawer_visible(True)
         else:
             self.render_stage()
 
@@ -562,7 +573,12 @@ class DesignWindow(QMainWindow):
             self._updating_table = previous
 
     def _set_progress(self, active):
+        if self.session is None:
+            frontier = 0
+        else:
+            frontier = next((index for index, approved in enumerate(self.session.approved) if not approved), len(STAGES))
         for index, label in enumerate(self.progress_labels):
+            label.setEnabled(self.session is not None and index <= frontier)
             if index < active:
                 label.setStyleSheet("background:#e8f7ef;color:#276749;border-radius:8px;padding:7px 6px;")
             elif index == active:
