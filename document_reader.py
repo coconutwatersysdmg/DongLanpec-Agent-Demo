@@ -152,18 +152,31 @@ def retrieve(bundle: DocumentBundle, equipment_id: str, keywords, limit=40) -> l
     target = (equipment_id or "").upper().strip()
     normalized_keywords = [str(k).lower().strip() for k in keywords if str(k).strip()]
     ranked = []
+    common_markers = ("通用要求", "统一规定", "所有换热器", "全部换热器", "general requirement", "all heat exchangers")
     for part in bundle.parts:
         upper = part.text.upper()
-        equipment_tokens = {item for token in EQUIPMENT_RE.findall(upper) for item in _expand_equipment(token)}
-        if equipment_tokens and target not in equipment_tokens:
+        matches = list(EQUIPMENT_RE.finditer(upper))
+        excerpts = []
+        if matches:
+            for index, match in enumerate(matches):
+                expanded = _expand_equipment(match.group(0))
+                if target not in expanded:
+                    continue
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(part.text)
+                excerpts.append(part.text[match.start():end].strip(" |;，。"))
+        elif any(marker in part.text.lower() for marker in common_markers):
+            excerpts.append(part.text)
+        else:
+            # Untagged continuation rows are not safe to attribute to one device.
             continue
-        keyword_hits = sum(1 for keyword in normalized_keywords if keyword in part.text.lower())
-        if target and target not in upper and keyword_hits == 0:
-            continue
-        score = (20 if target and target in upper else 0) + keyword_hits
-        ranked.append((score, part.source_ref, part))
+        for excerpt in excerpts:
+            keyword_hits = sum(1 for keyword in normalized_keywords if keyword in excerpt.lower())
+            if keyword_hits == 0 and target not in excerpt.upper():
+                continue
+            score = (20 if target in excerpt.upper() else 0) + keyword_hits
+            ranked.append((score, part.source_ref, part, excerpt))
     ranked.sort(key=lambda item: (-item[0], item[1]))
     return [
-        Evidence(part.source_ref, part.text, part.file_name, target)
-        for _score, _ref, part in ranked[: max(1, int(limit))]
+        Evidence(part.source_ref, excerpt, part.file_name, target)
+        for _score, _ref, part, excerpt in ranked[: max(1, int(limit))]
     ]

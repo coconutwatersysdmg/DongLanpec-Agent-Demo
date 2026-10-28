@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from models import STAGES
+from models import STAGES, ValidationIssue, ValidationResult
 from rules import validate_stage
 
 
@@ -13,7 +13,7 @@ class ReviewSession:
         self.version = prepared.version
         self.parameters = deepcopy(prepared.base_context)
         self.evidence = prepared.evidence
-        self.conflicts = deepcopy(prepared.conflicts)
+        self.conflicts = [dict(item, resolved=False) for item in deepcopy(prepared.conflicts)]
         self.history = deepcopy(prepared.history)
         self.approved = [False] * len(STAGES)
         self.current_stage_index = 0
@@ -27,10 +27,20 @@ class ReviewSession:
                     row["value"] = value
                     row["source"] = "历史建议值"
                     row["evidence"] = f"参考 {reference.get('reference')}（{reference.get('product_type')}，DN{reference.get('dn')}）"
+        grouped = {}
         for proposal in prepared.proposals:
-            stage = proposal.get("stage")
-            field = proposal.get("parameter")
+            grouped.setdefault((proposal.get("stage"), proposal.get("parameter")), []).append(proposal)
+        for (stage, field), proposals in grouped.items():
             if stage in self.parameters and field in self.parameters[stage]:
+                distinct = {repr(item.get("value")) for item in proposals}
+                if len(distinct) > 1:
+                    self.conflicts.append({
+                        "stage": stage, "parameter": field, "assertion_type": "conflict", "resolved": False,
+                        "evidence": "；".join(f"{item.get('source_ref', '')}：{item.get('evidence', '')} → {item.get('value')}" for item in proposals),
+                        "source_ref": "多个文件证据", "value": [item.get("value") for item in proposals],
+                    })
+                    continue
+                proposal = proposals[0]
                 row = self.parameters[stage][field]
                 row["base_value"] = row.get("value")
                 row["value"] = proposal.get("value")
@@ -57,16 +67,34 @@ class ReviewSession:
             self.approved[i] = False
         self.current_stage_index = index
         row = self.parameters[target_stage][field]
-        if row.get("derived"):
-            raise ValueError("该参数由程序联动计算，不能直接修改")
+        if row.get("derived") or not row.get("editable", True):
+            raise ValueError("该参数来自上游或由程序联动计算，不能在本阶段直接修改")
         row["value"] = value
         row["source"] = "人工修改"
         row["evidence"] = "用户在审核表中修改"
+        if target_stage == "布管与元件" and field == "换热管公称长度 LN":
+            linked = self.parameters["轴向设计"]["换热管公称长度 LN"]
+            linked["value"] = value
+            linked["source"] = "联动计算"
+            linked["evidence"] = "来自布管与元件阶段的换热管公称长度"
+        for conflict in self.conflicts:
+            if conflict.get("stage") == target_stage and conflict.get("parameter") == field:
+                conflict["resolved"] = True
         self.status = "待审核"
         self.last_result = None
 
     def run_review(self):
-        result = validate_stage(self.current_stage, self.current_parameters)
+        base = validate_stage(self.current_stage, self.current_parameters)
+        issues = list(base.issues)
+        for index, conflict in enumerate(self.conflicts):
+            if conflict.get("stage") == self.current_stage and not conflict.get("resolved"):
+                field = conflict.get("parameter", "")
+                evidence = conflict.get("evidence") or conflict.get("source_ref") or "文件内容存在冲突"
+                issues.append(ValidationIssue(
+                    f"conflict:{index}", field if field in self.current_parameters else "",
+                    f"存在未处理的文件冲突：{evidence}", None,
+                ))
+        result = ValidationResult(not issues, issues, base.derived_updates, base.coverage_warnings)
         for field, value in result.derived_updates.items():
             if field in self.current_parameters:
                 self.current_parameters[field]["value"] = value
@@ -74,6 +102,27 @@ class ReviewSession:
         self.last_result = result
         self.status = "审核通过待确认" if result.passed else "审核不通过"
         return result
+
+    def acknowledge_conflicts(self, stage: str | None = None):
+        target = stage or self.current_stage
+        changed = False
+        for conflict in self.conflicts:
+            if conflict.get("stage") == target and not conflict.get("resolved"):
+                conflict["resolved"] = True
+                changed = True
+        if changed:
+            self.status = "待审核"
+            self.last_result = None
+        return changed
+
+    def go_to_stage(self, index: int):
+        if not 0 <= index < len(STAGES):
+            raise ValueError("阶段索引无效")
+        if index > self.current_stage_index and not self.approved[index - 1]:
+            raise ValueError("请先确认前一个阶段")
+        self.current_stage_index = index
+        self.status = "已确认（修改将撤销后续）" if self.approved[index] else "待审核"
+        self.last_result = None
 
     def apply_recommendation(self, issue_id: str):
         if self.last_result is None:

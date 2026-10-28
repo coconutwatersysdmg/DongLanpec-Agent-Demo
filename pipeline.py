@@ -47,7 +47,7 @@ class TubeBundleAgent:
             trace.append({"tool": "extract_document_facts", "message": f"DeepSeek 已提取 {len(proposals)} 条候选，{len(conflicts)} 条待确认"})
         else:
             trace.append({"tool": "extract_document_facts", "message": "未调用模型：当前使用离线审核流程，未冒充 AI 提取结果"})
-        design = self.repository.create_design(equipment_id, product_type, dn)
+        design = self.repository.create_design(equipment_id, product_type, dn, bundle.documents)
         trace.append({"tool": "prepare_review", "message": "已生成四阶段人工审核草稿；尚未写入任何阶段结果"})
         return PreparedDesign(design["id"], design["version"], equipment_id, product_type, float(dn), context, evidence, proposals, conflicts, history, trace)
 

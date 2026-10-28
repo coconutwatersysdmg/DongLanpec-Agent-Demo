@@ -33,8 +33,8 @@ def _seed_context(product_type: str, dn: float) -> dict[str, dict[str, dict]]:
     connection = "强度焊＋贴胀" if u_type or floating else "强度焊"
     return {
         "管板型式": {
-            "产品型式": _p(product_type, source="模拟上游数据", evidence="模拟总Agent传入"),
-            "公称直径 DN": _p(dn, "mm", "模拟上游数据", "模拟前面模块设计数据"),
+            "产品型式": _p(product_type, source="模拟上游数据", evidence="模拟总Agent传入", editable=False),
+            "公称直径 DN": _p(dn, "mm", "模拟上游数据", "模拟前面模块设计数据", editable=False),
             "管板类型": _p(plate_type),
             "R1": _p(12.0, "mm"),
             "R2": _p(12.0, "mm"),
@@ -63,6 +63,8 @@ def _seed_context(product_type: str, dn: float) -> dict[str, dict[str, dict]]:
             "防冲板数量": _p(1),
             "防冲板厚度": _p(6.0, "mm"),
             "防冲板宽度": _p(300.0, "mm"),
+            "U形管根数": _p("", "根"),
+            "管孔数": _p("", "个"),
         },
         "管-板连接": {
             "管板连接方式": _p(connection),
@@ -74,7 +76,7 @@ def _seed_context(product_type: str, dn: float) -> dict[str, dict[str, dict]]:
             "焊接计算长度 L": _p(5.0, "mm", "联动计算", "形式c：L=lf+lgroove", editable=False, derived=True),
         },
         "轴向设计": {
-            "换热管公称长度 LN": _p(4500.0, "mm", "模拟上游数据", "来自布管阶段"),
+            "换热管公称长度 LN": _p(4500.0, "mm", "联动计算", "来自布管阶段", editable=False, derived=True),
             "伸出管板长度 L_ext": _p(3.0, "mm"),
             "第一块折流板距管板": _p(300.0, "mm"),
             "折流板间距": _p(450.0, "mm"),
@@ -151,17 +153,22 @@ class DemoRepository:
 
     def lookup_history(self, product_type: str, dn: float) -> list[dict]:
         kind = (product_type or "").upper()
-        ranked = sorted(HISTORY, key=lambda r: (r["product_type"] != kind, abs(float(r["dn"]) - float(dn or 0))))
+        ranked = sorted((r for r in HISTORY if r["product_type"] == kind), key=lambda r: abs(float(r["dn"]) - float(dn or 0)))
         return [dict(row, source="历史建议值") for row in ranked]
 
-    def create_design(self, equipment_id: str, product_type: str, dn: float) -> dict:
-        cur = self.connection.execute(
-            "INSERT INTO demo_design(equipment_id,product_type,dn) VALUES(?,?,?)",
-            (equipment_id, product_type, float(dn)),
-        )
-        design_id = cur.lastrowid
-        self._event(design_id, "创建设计", {"equipment_id": equipment_id})
-        self.connection.commit()
+    def create_design(self, equipment_id: str, product_type: str, dn: float, documents=None) -> dict:
+        with self.connection:
+            cur = self.connection.execute(
+                "INSERT INTO demo_design(equipment_id,product_type,dn) VALUES(?,?,?)",
+                (equipment_id, product_type, float(dn)),
+            )
+            design_id = cur.lastrowid
+            for document in documents or []:
+                self.connection.execute(
+                    "INSERT INTO source_document(design_id,file_name,file_hash,status,evidence_json) VALUES(?,?,?,?,?)",
+                    (design_id, document.name, document.sha256, document.status, "[]"),
+                )
+            self._event(design_id, "创建设计", {"equipment_id": equipment_id, "source_count": len(documents or [])})
         return self.get_design(design_id)
 
     def get_design(self, design_id: int) -> dict:
@@ -201,6 +208,36 @@ class DemoRepository:
             "SELECT payload_json FROM stage_review WHERE design_id=? AND stage=?", (design_id, stage)
         ).fetchone()
         return json.loads(row[0]) if row else None
+
+    def list_sources(self, design_id: int) -> list[dict]:
+        return [dict(row) for row in self.connection.execute(
+            "SELECT file_name,file_hash,status,evidence_json FROM source_document WHERE design_id=? ORDER BY file_name",
+            (design_id,),
+        ).fetchall()]
+
+    def list_designs(self) -> list[dict]:
+        return [dict(row) for row in self.connection.execute(
+            "SELECT * FROM demo_design ORDER BY updated_at DESC,id DESC"
+        ).fetchall()]
+
+    def load_design_snapshot(self, design_id: int) -> dict:
+        return {
+            "design": self.get_design(design_id),
+            "stages": {stage: self.load_stage(design_id, stage) for stage in STAGES},
+            "sources": self.list_sources(design_id),
+        }
+
+    def clone_design(self, design_id: int) -> dict:
+        source = self.get_design(design_id)
+        clone = self.create_design(source["equipment_id"], source["product_type"], source["dn"])
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO source_document(design_id,file_name,file_hash,status,evidence_json) "
+                "SELECT ?,file_name,file_hash,status,evidence_json FROM source_document WHERE design_id=?",
+                (clone["id"], design_id),
+            )
+            self._event(clone["id"], "复制历史方案", {"source_design_id": design_id})
+        return self.get_design(clone["id"])
 
     def clear_stages_from(self, design_id: int, stage: str, expected_version: int) -> int:
         if stage not in STAGES:

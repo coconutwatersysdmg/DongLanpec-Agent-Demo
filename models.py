@@ -34,6 +34,7 @@ class ValidationResult:
     passed: bool
     issues: list[ValidationIssue] = field(default_factory=list)
     derived_updates: dict[str, Any] = field(default_factory=dict)
+    coverage_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass

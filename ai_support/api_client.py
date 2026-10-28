@@ -8,6 +8,19 @@ from urllib.parse import urlsplit
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
+CANONICAL_FIELDS = {
+    "管板型式": {"产品型式", "公称直径 DN", "管板类型", "R1", "R2", "h", "α", "ρ", "e", "布管限定圆 DL"},
+    "布管与元件": {"管程程数", "管程分程形式", "壳程程数", "换热管布置方式", "换热管外径 do", "换热管壁厚 δ", "换热管中心距 S", "换热管公称长度 LN", "分程隔板两侧相邻管中心距（竖直）", "分程隔板两侧相邻管中心距（水平）", "拉杆直径", "拉杆数量", "旁路挡板数量", "旁路挡板厚度", "旁路挡板宽度", "防冲板数量", "防冲板厚度", "防冲板宽度", "U形管根数", "管孔数"},
+    "管-板连接": {"管板连接方式", "焊接结构形式", "管板厚度 δt", "贴胀长度 lf", "坡口长度 lgroove", "内伸长度 linner", "焊接计算长度 L"},
+    "轴向设计": {"换热管公称长度 LN", "伸出管板长度 L_ext", "第一块折流板距管板", "折流板间距", "末块折流板距管板", "折流板厚度"},
+}
+
+FIELD_ALIASES = {
+    "换热管外径": "换热管外径 do", "管外径": "换热管外径 do", "换热管壁厚": "换热管壁厚 δ",
+    "换热管中心距": "换热管中心距 S", "换热管长度": "换热管公称长度 LN",
+    "U型管根数": "U形管根数", "U形管数量": "U形管根数", "管孔数量": "管孔数", "管孔总数": "管孔数",
+}
+
 
 @dataclass(frozen=True)
 class APIConfig:
@@ -44,7 +57,7 @@ def parse_fact_payload(raw) -> dict:
         if not isinstance(item, dict):
             continue
         stage = str(item.get("stage", ""))
-        parameter = str(item.get("parameter", "")).strip()
+        parameter = FIELD_ALIASES.get(str(item.get("parameter", "")).strip(), str(item.get("parameter", "")).strip())
         assertion = str(item.get("assertion_type", "")).lower()
         if stage not in valid_stages or not parameter:
             continue
@@ -57,7 +70,13 @@ def parse_fact_payload(raw) -> dict:
             "source_ref": str(item.get("source_ref", ""))[:300],
             "assertion_type": assertion,
         }
-        if assertion in {"question", "conflict", "uncertain", "option"}:
+        if parameter not in CANONICAL_FIELDS[stage]:
+            clean["assertion_type"] = "unsupported"
+            conflicts.append(clean)
+        elif not clean["evidence"] or not clean["source_ref"]:
+            clean["assertion_type"] = "missing_evidence"
+            conflicts.append(clean)
+        elif assertion in {"question", "conflict", "uncertain", "option"}:
             conflicts.append(clean)
         elif assertion in {"confirmed", "requirement"}:
             facts.append(clean)
@@ -85,6 +104,7 @@ class DeepSeekClient:
             "输出JSON对象，facts数组元素必须含stage、parameter、value、unit、evidence、source_ref、assertion_type。"
             "stage只能是管板型式、布管与元件、管-板连接、轴向设计；assertion_type只能是confirmed、requirement、question、conflict、uncertain、option。"
             "U形管根数和管孔数必须保持为不同参数。"
+            f"只允许使用以下规范参数名：{json.dumps({k: sorted(v) for k, v in CANONICAL_FIELDS.items()}, ensure_ascii=False)}"
         )
         user = json.dumps({"equipment_id": equipment_id, "evidence": rows}, ensure_ascii=False)
         return parse_fact_payload(self._complete_json(system, user))

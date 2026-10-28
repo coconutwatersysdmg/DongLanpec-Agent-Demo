@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import html
+import json
+import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QThread, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
+    QAbstractItemView, QApplication, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser,
+    QListWidget, QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser,
     QVBoxLayout, QWidget,
 )
 
@@ -24,6 +27,24 @@ from settings import load_settings, settings_dialog
 EXAMPLE_ZIP = Path(__file__).resolve().parent.parent / "01-管壳式热交换器-输入文件 (2).zip"
 
 
+class TaskThread(QThread):
+    result_ready = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self.fn = fn
+
+    def run(self):
+        try:
+            result = self.fn()
+            if not self.isInterruptionRequested():
+                self.result_ready.emit(result)
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.failed.emit(str(exc))
+
+
 class DesignWindow(QMainWindow):
     def __init__(self, repository=None):
         super().__init__()
@@ -36,6 +57,9 @@ class DesignWindow(QMainWindow):
         self.prepared = None
         self._updating_table = False
         self.recommendation_buttons = []
+        self.worker = None
+        self._worker_callback = None
+        self._worker_cancelled = False
         self.setWindowTitle("管束 AI 审核助手 Demo")
         self.resize(1540, 920)
         self.setMinimumSize(1180, 720)
@@ -58,6 +82,9 @@ class DesignWindow(QMainWindow):
         self.db_label = QLabel("独立演示数据库")
         self.db_label.setObjectName("safeBadge")
         header.addWidget(self.db_label)
+        history_button = QPushButton("历史方案")
+        history_button.clicked.connect(self.open_history)
+        header.addWidget(history_button)
         settings_button = QPushButton("DeepSeek 设置")
         settings_button.clicked.connect(self.open_settings)
         header.addWidget(settings_button)
@@ -104,6 +131,10 @@ class DesignWindow(QMainWindow):
         start.setObjectName("primaryButton")
         start.clicked.connect(self.start_analysis)
         source_layout.addWidget(start)
+        self.stop_button = QPushButton("停止")
+        self.stop_button.setEnabled(False)
+        self.stop_button.clicked.connect(self.stop_background_task)
+        source_layout.addWidget(self.stop_button)
         layout.addWidget(source)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -169,6 +200,10 @@ class DesignWindow(QMainWindow):
         review_layout.addWidget(self.recommendation_widget)
 
         actions = QHBoxLayout()
+        self.previous_button = QPushButton("返回上一阶段")
+        self.previous_button.clicked.connect(self.go_previous_stage)
+        self.previous_button.setEnabled(False)
+        actions.addWidget(self.previous_button)
         self.review_button = QPushButton("审核本阶段")
         self.review_button.setObjectName("primaryButton")
         self.review_button.clicked.connect(self.run_review)
@@ -223,11 +258,11 @@ class DesignWindow(QMainWindow):
 
     def load_inputs(self, paths):
         self.selected_paths = [str(Path(path)) for path in paths]
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            self.bundle = scan_inputs(self.selected_paths)
-        finally:
-            QApplication.restoreOverrideCursor()
+        self.file_label.setText("正在扫描文件，可继续查看界面……")
+        self._start_worker(lambda: scan_inputs(self.selected_paths), self._finish_scan)
+
+    def _finish_scan(self, bundle):
+        self.bundle = bundle
         equipment = identify_equipment(self.bundle)
         self.equipment_combo.clear()
         self.equipment_combo.addItems(equipment)
@@ -240,7 +275,16 @@ class DesignWindow(QMainWindow):
         if not equipment:
             QMessageBox.information(self, "请确认设备", "没有识别到设备位号，请在“设备位号”框中手工输入后继续。")
             return
-        self.start_with_bundle(self.bundle, equipment, self.product_combo.currentText(), self.dn.value())
+        product_type, dn = self.product_combo.currentText(), self.dn.value()
+        client = DeepSeekClient(self.config) if self.config.configured else None
+        def work():
+            local_repo = DemoRepository(self.repository.path)
+            try:
+                return TubeBundleAgent(local_repo, client).prepare_design(self.bundle, equipment, product_type, dn)
+            finally:
+                local_repo.close()
+        self.review_status.setText("分析中")
+        self._start_worker(work, self._accept_prepared)
 
     def start_with_bundle(self, bundle, equipment, product_type, dn):
         client = DeepSeekClient(self.config) if self.config.configured else None
@@ -250,13 +294,57 @@ class DesignWindow(QMainWindow):
             QMessageBox.warning(self, "处理失败", str(exc))
             self.append_chat("assistant", f"处理失败：{exc}")
             return
-        self.session = ReviewSession(self.prepared, self.repository)
+        self._accept_prepared(self.prepared)
+
+    def _accept_prepared(self, prepared):
+        self.prepared = prepared
+        self.session = ReviewSession(prepared, self.repository)
         for row in self.prepared.trace:
             self.append_chat("assistant", row["message"])
         if self.prepared.conflicts:
             self.append_chat("assistant", f"有 {len(self.prepared.conflicts)} 条问题或冲突，已保留给你人工判断，不会自动覆盖参数。")
         self.review_button.setEnabled(True)
         self.render_stage()
+
+    def _start_worker(self, fn, callback):
+        if self.worker is not None and self.worker.isRunning():
+            QMessageBox.information(self, "正在处理", "请等待当前步骤结束，或点击“停止”。")
+            return
+        self._worker_cancelled = False
+        self._worker_callback = callback
+        self.worker = TaskThread(fn, self)
+        self.worker.result_ready.connect(self._worker_result)
+        self.worker.failed.connect(self._worker_error)
+        self.worker.finished.connect(self._worker_finished)
+        self.stop_button.setEnabled(True)
+        self.worker.start()
+
+    def _worker_result(self, result):
+        if not self._worker_cancelled and self._worker_callback:
+            self._worker_callback(result)
+
+    def _worker_error(self, message):
+        if self._worker_cancelled:
+            return
+        self.review_status.setText("处理失败，可重试")
+        self.append_chat("assistant", f"处理失败：{message}")
+        QMessageBox.warning(self, "处理失败", message)
+
+    def _worker_finished(self):
+        self.stop_button.setEnabled(False)
+        if self.worker is not None:
+            self.worker.deleteLater()
+        self.worker = None
+        self._worker_callback = None
+
+    def stop_background_task(self):
+        if self.worker is None:
+            return
+        self._worker_cancelled = True
+        self.worker.requestInterruption()
+        self.stop_button.setEnabled(False)
+        self.review_status.setText("已请求停止")
+        self.append_chat("assistant", "已请求停止。当前文件页或网络请求结束后会安全停止，不会保存未审核数据。")
 
     def render_stage(self):
         if self.session is None:
@@ -282,6 +370,7 @@ class DesignWindow(QMainWindow):
             self._updating_table = False
             self.parameter_table.blockSignals(signals_were_blocked)
         self.confirm_button.setEnabled(self.session.status == "审核通过待确认")
+        self.previous_button.setEnabled(self.session.current_stage_index > 0)
         self._set_progress(2 + self.session.current_stage_index)
 
     def on_table_item_changed(self, item):
@@ -319,7 +408,8 @@ class DesignWindow(QMainWindow):
         result = self.session.run_review()
         self.render_stage()
         if result.passed:
-            self.issue_text.setPlainText("全部规则审核通过。请检查内容；确认无误后点击“确认并进入下一步”。")
+            warning_text = "\n".join(f"注意：{item}" for item in result.coverage_warnings)
+            self.issue_text.setPlainText("Demo 已覆盖的规则审核通过。请检查内容；确认无误后点击“确认并进入下一步”。\n" + warning_text)
             self.review_status.setText("审核通过，等待你确认")
             self.review_status.setStyleSheet("background:#e8f7ef;color:#276749;padding:5px 10px;border-radius:10px;")
             self.confirm_button.setEnabled(True)
@@ -347,7 +437,18 @@ class DesignWindow(QMainWindow):
                 button.clicked.connect(lambda _checked=False, issue_id=issue.issue_id: self.apply_recommendation(issue_id))
                 self.recommendation_layout.insertWidget(self.recommendation_layout.count() - 1, button)
                 self.recommendation_buttons.append(button)
+        if any(issue.issue_id.startswith("conflict:") for issue in issues):
+            button = QPushButton("我已阅读冲突并人工处理")
+            button.clicked.connect(self.acknowledge_conflicts)
+            self.recommendation_layout.insertWidget(self.recommendation_layout.count() - 1, button)
+            self.recommendation_buttons.append(button)
         self.issue_text.setPlainText("\n".join(lines))
+
+    def acknowledge_conflicts(self):
+        if self.session and self.session.acknowledge_conflicts():
+            self.render_stage()
+            self.review_status.setText("冲突已确认，请再次审核")
+            self.issue_text.setPlainText("已记录你对本阶段冲突的人工处理。请再次点击“审核本阶段”。")
 
     def apply_recommendation(self, issue_id):
         try:
@@ -369,6 +470,13 @@ class DesignWindow(QMainWindow):
         except (ValueError, RuntimeError) as exc:
             QMessageBox.warning(self, "尚不能进入下一步", str(exc))
             return
+        except sqlite3.Error as exc:
+            self.review_status.setText("保存失败，可重试")
+            self.issue_text.setPlainText(f"保存失败：{exc}\n审核结果仍保留，请检查磁盘/数据库后再次点击确认。")
+            self.confirm_button.setEnabled(True)
+            self.append_chat("assistant", f"独立演示数据库保存失败，可重试：{exc}")
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return
         self.append_chat("assistant", f"你已确认“{stage}”，审核快照已写入独立演示数据库。")
         if result == "已完成":
             self.stage_title.setText("四个阶段全部完成")
@@ -380,6 +488,71 @@ class DesignWindow(QMainWindow):
             self._set_progress(6)
         else:
             self.render_stage()
+
+    def go_previous_stage(self):
+        if self.session is None or self.session.current_stage_index == 0:
+            return
+        self.session.go_to_stage(self.session.current_stage_index - 1)
+        self.render_stage()
+        self.append_chat("assistant", "已返回上一阶段。若修改已确认参数，后续审核会自动失效。")
+
+    def open_history(self):
+        designs = self.repository.list_designs()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("历史审核方案（只读）")
+        dialog.resize(780, 560)
+        layout = QVBoxLayout(dialog)
+        listing = QListWidget()
+        for design in designs:
+            listing.addItem(f"#{design['id']}  {design['equipment_id']}  {design['product_type']}  DN{design['dn']:g}  {design['status']}")
+            listing.item(listing.count() - 1).setData(Qt.UserRole, design["id"])
+        details = QTextBrowser()
+        layout.addWidget(listing)
+        layout.addWidget(details, 1)
+        buttons = QHBoxLayout()
+        copy_button = QPushButton("基于此方案创建新版本")
+        close_button = QPushButton("关闭")
+        buttons.addWidget(copy_button)
+        buttons.addStretch()
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+
+        def show_snapshot():
+            item = listing.currentItem()
+            if item:
+                snapshot = self.repository.load_design_snapshot(item.data(Qt.UserRole))
+                details.setPlainText(json.dumps(snapshot, ensure_ascii=False, indent=2))
+
+        def copy_snapshot():
+            item = listing.currentItem()
+            if not item:
+                return
+            source_id = item.data(Qt.UserRole)
+            snapshot = self.repository.load_design_snapshot(source_id)
+            clone = self.repository.clone_design(source_id)
+            base = self.repository.load_base_context(clone["product_type"], clone["dn"])
+            conflicts = []
+            for stage, payload in snapshot["stages"].items():
+                if payload:
+                    base[stage] = payload.get("parameters", base[stage])
+                    conflicts.extend(payload.get("conflicts", []))
+            prepared = SimpleNamespace(
+                design_id=clone["id"], version=clone["version"], base_context=base,
+                evidence=[], conflicts=conflicts, history=self.repository.lookup_history(clone["product_type"], clone["dn"]), proposals=[], trace=[],
+            )
+            dialog.accept()
+            self._accept_prepared(prepared)
+            self.append_chat("assistant", f"已从历史方案 #{source_id} 创建新版本 #{clone['id']}。旧版本保持只读。")
+
+        listing.currentItemChanged.connect(lambda *_: show_snapshot())
+        copy_button.clicked.connect(copy_snapshot)
+        close_button.clicked.connect(dialog.reject)
+        if listing.count():
+            listing.setCurrentRow(0)
+        else:
+            details.setPlainText("还没有历史审核方案。")
+            copy_button.setEnabled(False)
+        dialog.exec_()
 
     def _find_row(self, field):
         for row in range(self.parameter_table.rowCount()):
@@ -430,6 +603,12 @@ class DesignWindow(QMainWindow):
         self.prompt.clear()
 
     def closeEvent(self, event):
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self._worker_cancelled = True
+            self.review_status.setText("正在安全停止，请稍候再关闭")
+            event.ignore()
+            return
         if self._owns_repository:
             self.repository.close()
         super().closeEvent(event)
