@@ -98,10 +98,15 @@ class WindowTests(unittest.TestCase):
     def test_codex_style_layout_is_wide_with_fixed_sidebar_and_inline_preview(self):
         self.assertGreaterEqual(self.window.width(), 1760)
         self.assertGreaterEqual(self.window.height(), 1040)
-        self.assertEqual(self.window.sidebar.minimumWidth(), 300)
-        self.assertEqual(self.window.sidebar.maximumWidth(), 300)
+        self.assertGreaterEqual(self.window.sidebar.minimumWidth(), 340)
+        self.assertEqual(self.window.sidebar.maximumWidth(), self.window.sidebar.minimumWidth())
         self.assertIs(self.window.review_panel.parentWidget(), self.window.main_panel)
         self.assertEqual(self.window.findChildren(QSplitter), [])
+
+    def test_preview_table_uses_readable_codex_scale(self):
+        self.assertGreaterEqual(self.window.parameter_table.font().pixelSize(), 16)
+        self.assertGreaterEqual(self.window.parameter_table.verticalHeader().defaultSectionSize(), 44)
+        self.assertGreaterEqual(self.window.parameter_table.horizontalHeader().height(), 44)
 
     def test_preview_exposes_one_save_action(self):
         self.assertEqual(self.window.save_button.text(), "保留")

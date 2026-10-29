@@ -43,7 +43,7 @@ class SettingsLauncherTests(unittest.TestCase):
                 env=env,cwd=tmp,capture_output=True,input='\n',encoding='utf-8',errors='replace',timeout=25)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertEqual(target.read_bytes()[:8],b'\x89PNG\r\n\x1a\n')
-            self.assertIn('validation passed; waiting for user confirmation',result.stdout)
+            self.assertIn('preview ready; save action available',result.stdout)
 
 
 if __name__=='__main__':unittest.main()

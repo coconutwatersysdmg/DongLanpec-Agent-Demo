@@ -7,7 +7,7 @@ import sqlite3
 from types import SimpleNamespace
 
 from PyQt5.QtCore import QThread, Qt, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView, QDialog, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
@@ -54,7 +54,7 @@ class DesignWindow(QMainWindow):
         self.worker = None
         self._worker_callback = None
         self._worker_cancelled = False
-        self.setWindowTitle("管束 AI 审核助手 Demo")
+        self.setWindowTitle("管束 AI 设计助手 Demo")
         self.resize(1760, 1040)
         self.setMinimumSize(1280, 760)
         self._build_ui()
@@ -70,10 +70,10 @@ class DesignWindow(QMainWindow):
 
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(300)
+        self.sidebar.setFixedWidth(360)
         sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(22, 22, 22, 22)
-        sidebar_layout.setSpacing(8)
+        sidebar_layout.setContentsMargins(26, 26, 26, 26)
+        sidebar_layout.setSpacing(10)
         brand = QLabel("管束 AI")
         brand.setObjectName("sidebarTitle")
         sidebar_layout.addWidget(brand)
@@ -121,8 +121,8 @@ class DesignWindow(QMainWindow):
         self.main_panel = QFrame()
         self.main_panel.setObjectName("mainPanel")
         main_layout = QVBoxLayout(self.main_panel)
-        main_layout.setContentsMargins(32, 22, 32, 22)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(38, 26, 38, 26)
+        main_layout.setSpacing(16)
         header = QHBoxLayout()
         title = QLabel("管束设计")
         title.setObjectName("mainTitle")
@@ -132,7 +132,7 @@ class DesignWindow(QMainWindow):
         self.conversation = QTextBrowser()
         self.conversation.setObjectName("conversation")
         self.conversation.setOpenExternalLinks(False)
-        main_layout.addWidget(self.conversation, 2)
+        main_layout.addWidget(self.conversation, 1)
 
         self.review_panel = QFrame()
         self.review_panel.setObjectName("reviewCard")
@@ -140,28 +140,35 @@ class DesignWindow(QMainWindow):
         review_layout.setContentsMargins(18, 14, 18, 14)
         review_layout.setSpacing(8)
         top = QHBoxLayout()
-        self.stage_title = QLabel("尚未开始审核")
+        self.stage_title = QLabel("尚未开始")
         self.stage_title.setObjectName("sectionTitle")
         top.addWidget(self.stage_title)
         top.addStretch()
         self.review_status = QLabel("等待文件")
         self.review_status.setObjectName("statusBadge")
+        self.review_status.hide()
         top.addWidget(self.review_status)
-        collapse_review = QPushButton("收起预览")
+        collapse_review = QPushButton("收起")
         collapse_review.clicked.connect(lambda: self.set_review_drawer_visible(False))
         top.addWidget(collapse_review)
         review_layout.addLayout(top)
         self.stage_hint = QLabel("检查并修改参数。")
         self.stage_hint.setWordWrap(True)
+        self.stage_hint.hide()
         review_layout.addWidget(self.stage_hint)
 
         self.parameter_table = QTableWidget(0, 5)
+        self.parameter_table.setFont(QFont("Microsoft YaHei", 12))
         self.parameter_table.setHorizontalHeaderLabels(("参数", "参数值", "单位", "来源", "证据/说明"))
         self.parameter_table.horizontalHeader().setStretchLastSection(True)
-        self.parameter_table.setColumnWidth(0, 245)
-        self.parameter_table.setColumnWidth(1, 155)
-        self.parameter_table.setColumnWidth(2, 80)
-        self.parameter_table.setColumnWidth(3, 125)
+        self.parameter_table.horizontalHeader().setMinimumHeight(48)
+        self.parameter_table.verticalHeader().setDefaultSectionSize(48)
+        self.parameter_table.setAlternatingRowColors(True)
+        self.parameter_table.setShowGrid(True)
+        self.parameter_table.setColumnWidth(0, 280)
+        self.parameter_table.setColumnWidth(1, 180)
+        self.parameter_table.setColumnWidth(2, 90)
+        self.parameter_table.setColumnWidth(3, 150)
         self.parameter_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.parameter_table.itemChanged.connect(self.on_table_item_changed)
         review_layout.addWidget(self.parameter_table, 1)
@@ -194,7 +201,7 @@ class DesignWindow(QMainWindow):
         self.save_button.setEnabled(False)
         self.review_actions.addWidget(self.save_button)
         review_layout.addLayout(self.review_actions)
-        main_layout.addWidget(self.review_panel, 3)
+        main_layout.addWidget(self.review_panel, 6)
         self.review_panel.hide()
 
         composer = QFrame()
@@ -203,8 +210,10 @@ class DesignWindow(QMainWindow):
         composer_layout.setContentsMargins(14, 12, 14, 10)
         composer_layout.setSpacing(6)
         self.prompt = QPlainTextEdit()
-        self.prompt.setPlaceholderText("输入要求……")
-        self.prompt.setMaximumHeight(100)
+        self.prompt.setPlaceholderText("给管束 Agent 发送消息")
+        self.prompt.setFont(QFont("Microsoft YaHei", 11))
+        self.prompt.setMinimumHeight(88)
+        self.prompt.setMaximumHeight(132)
         composer_layout.addWidget(self.prompt)
         send_row = QHBoxLayout()
         send_row.addStretch()
@@ -218,29 +227,33 @@ class DesignWindow(QMainWindow):
 
     def _apply_style(self):
         self.setStyleSheet("""
-        QMainWindow, QWidget { background:#f7f7f5; color:#202124; font-family:'Microsoft YaHei'; font-size:14px; }
-        #sidebar { background:#f2f2ee; border-right:1px solid #deded8; }
-        #sidebarTitle { font-size:25px; font-weight:700; padding:8px 4px 18px 4px; }
-        #sidebarSection { color:#777772; font-weight:600; padding:22px 6px 6px 6px; }
+        QMainWindow, QWidget { background:#fbfaf8; color:#202124; font-family:'Microsoft YaHei'; font-size:15px; }
+        #sidebar { background:#f4f3ef; border-right:1px solid #e3e1dc; }
+        #sidebarTitle { font-size:27px; font-weight:700; padding:8px 5px 22px 5px; }
+        #sidebarSection { color:#7a7974; font-size:14px; font-weight:600; padding:24px 8px 6px 8px; }
         #mainPanel { background:#ffffff; }
-        #mainTitle { font-size:22px; font-weight:700; padding:5px 0 12px 0; }
-        #sectionTitle { font-size:18px; font-weight:700; }
-        #subTitle { font-size:14px; font-weight:700; color:#444; }
-        #conversation { background:#ffffff; border:none; padding:6px; }
-        #reviewCard { background:#ffffff; border:1px solid #deded8; border-radius:14px; }
-        #composer { background:#ffffff; border:1px solid #d8d8d2; border-radius:16px; }
-        QPushButton { background:#fff; border:1px solid #d0d0ca; border-radius:8px; padding:8px 14px; }
-        QPushButton:hover { background:#f3f3ef; }
+        #mainTitle { font-size:22px; font-weight:700; padding:5px 0 14px 0; }
+        #sectionTitle { font-size:21px; font-weight:700; padding:2px 0 4px 0; }
+        #subTitle { font-size:15px; font-weight:700; color:#383838; }
+        #conversation { background:#ffffff; border:none; padding:10px 4px; font-size:16px; }
+        #reviewCard { background:#ffffff; border:1px solid #e1dfda; border-radius:16px; }
+        #composer { background:#ffffff; border:1px solid #d9d7d2; border-radius:18px; }
+        #issueContainer { background:#fff8f7; border:1px solid #f0ceca; border-radius:10px; padding:10px; }
+        QPushButton { background:#fff; border:1px solid #d3d1cc; border-radius:9px; padding:9px 16px; font-size:15px; }
+        QPushButton:hover { background:#f1f0ec; }
         QPushButton:disabled { color:#aaa; background:#f3f3f0; }
-        #sideAction { text-align:left; border:none; background:transparent; padding:10px 12px; }
-        #sideAction:hover { background:#e7e7e2; }
-        #primarySideButton { text-align:left; background:#e7e7e2; border:none; font-weight:600; padding:11px 12px; }
-        #primaryButton, #sendButton { background:#2368a8; color:white; border-color:#2368a8; font-weight:600; }
+        #sideAction { text-align:left; border:none; background:transparent; padding:12px 14px; }
+        #sideAction:hover { background:#e8e7e2; }
+        #primarySideButton { text-align:left; background:#e8e7e2; border:none; font-weight:600; padding:13px 14px; }
+        #stageButton { text-align:left; border:none; background:transparent; padding:12px 14px; }
+        #stageButton:hover { background:#e8e7e2; }
+        #primaryButton { min-width:112px; min-height:24px; background:#1f6fb2; color:white; border-color:#1f6fb2; font-weight:600; }
+        #sendButton { background:#1f6fb2; color:white; border-color:#1f6fb2; font-weight:600; }
         #statusBadge { background:#fff4d6; color:#805b10; border:1px solid #e1c36d; border-radius:10px; padding:5px 10px; }
-        QLabel#progressIdle { color:#696964; border-radius:8px; padding:8px 12px; }
-        QPlainTextEdit, QTableWidget { background:white; border:1px solid #d8d8d2; border-radius:6px; }
-        QHeaderView::section { background:#f1f1ed; color:#333; padding:8px; border:none; border-right:1px solid #deded8; }
-        QTableWidget::item { padding:5px; }
+        QPlainTextEdit, QTableWidget { background:white; border:1px solid #dedcd7; border-radius:8px; }
+        QTableWidget { font-size:16px; alternate-background-color:#faf9f7; gridline-color:#ebe9e4; selection-background-color:#e7f1fb; selection-color:#202124; }
+        QHeaderView::section { background:#f3f2ef; color:#343434; padding:10px; border:none; border-right:1px solid #dfddd8; font-size:15px; font-weight:600; }
+        QTableWidget::item { padding:9px; }
         """)
 
     def append_chat(self, role, message):
@@ -281,7 +294,7 @@ class DesignWindow(QMainWindow):
     def _accept_prepared(self, prepared):
         self.prepared = prepared
         self.session = ReviewSession(prepared, self.repository)
-        self.append_chat("assistant", "预览已生成，请审核。")
+        self.append_chat("assistant", "预览已生成。")
         if self.prepared.conflicts:
             self.append_chat("assistant", f"有 {len(self.prepared.conflicts)} 条问题或冲突，已保留给你人工判断，不会自动覆盖参数。")
         self.save_button.setEnabled(True)
@@ -334,7 +347,7 @@ class DesignWindow(QMainWindow):
         signals_were_blocked = self.parameter_table.blockSignals(True)
         self._updating_table = True
         try:
-            self.stage_title.setText(f"第 {self.session.current_stage_index + 1}/4 阶段 · {self.session.current_stage}")
+            self.stage_title.setText(self.session.current_stage)
             self.review_status.setText(self.session.status)
             rows = self.session.current_parameters
             self.parameter_table.setRowCount(len(rows))
@@ -469,7 +482,7 @@ class DesignWindow(QMainWindow):
             self.append_chat("assistant", f"独立演示数据库保存失败，可重试：{exc}")
             QMessageBox.warning(self, "保存失败", str(exc))
             return
-        self.append_chat("assistant", f"你已确认“{stage}”，审核快照已写入独立演示数据库。")
+        self.append_chat("assistant", f"已保留“{stage}”。")
         if result == "已完成":
             self.render_stage()
             self.review_status.setText("已完成并保存")
@@ -479,17 +492,10 @@ class DesignWindow(QMainWindow):
         else:
             self.render_stage()
 
-    def go_previous_stage(self):
-        if self.session is None or self.session.current_stage_index == 0:
-            return
-        self.session.go_to_stage(self.session.current_stage_index - 1)
-        self.render_stage()
-        self.append_chat("assistant", "已返回上一阶段。若修改已确认参数，后续审核会自动失效。")
-
     def open_history(self):
         designs = self.repository.list_designs()
         dialog = QDialog(self)
-        dialog.setWindowTitle("历史审核方案（只读）")
+        dialog.setWindowTitle("历史方案（只读）")
         dialog.resize(780, 560)
         layout = QVBoxLayout(dialog)
         listing = QListWidget()
@@ -540,7 +546,7 @@ class DesignWindow(QMainWindow):
         if listing.count():
             listing.setCurrentRow(0)
         else:
-            details.setPlainText("还没有历史审核方案。")
+            details.setPlainText("还没有历史方案。")
             copy_button.setEnabled(False)
         dialog.exec_()
 

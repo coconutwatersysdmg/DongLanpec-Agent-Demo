@@ -32,14 +32,13 @@ def main():
 
     if args.demo or args.screenshot:
         window.start_with_bundle(DocumentBundle([]), "E-1001", "AEU", 700)
-        window.run_review()
     if args.screenshot:
         def save_and_exit():
             path = Path(args.screenshot).resolve()
             path.parent.mkdir(parents=True, exist_ok=True)
             ok = window.grab().save(str(path))
             print(f"Review demo screenshot: {path}")
-            print("Stage: 管板型式; validation passed; waiting for user confirmation")
+            print("Stage: 管板型式; preview ready; save action available")
             app.exit(0 if ok else 1)
         QTimer.singleShot(300, save_and_exit)
     return app.exec_()
