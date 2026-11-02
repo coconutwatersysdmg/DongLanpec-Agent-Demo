@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QGraphicsView, QMessageBox, QSplitter, QTabWidget
 
 from ai_support.api_client import APIConfig
@@ -95,18 +96,75 @@ class WindowTests(unittest.TestCase):
         self.assertIn("管板型式", self.window.stage_title.text())
         self.assertGreater(self.window.parameter_table.rowCount(), 5)
 
-    def test_codex_style_layout_is_wide_with_fixed_sidebar_and_inline_preview(self):
-        self.assertGreaterEqual(self.window.width(), 1760)
-        self.assertGreaterEqual(self.window.height(), 1040)
-        self.assertGreaterEqual(self.window.sidebar.minimumWidth(), 340)
+    def test_codex_style_layout_uses_normal_desktop_size_and_fixed_sidebar(self):
+        self.assertEqual(self.window.size().width(), 1440)
+        self.assertEqual(self.window.size().height(), 900)
+        self.assertGreaterEqual(self.window.sidebar.minimumWidth(), 300)
+        self.assertLessEqual(self.window.sidebar.minimumWidth(), 320)
         self.assertEqual(self.window.sidebar.maximumWidth(), self.window.sidebar.minimumWidth())
         self.assertIs(self.window.review_panel.parentWidget(), self.window.main_panel)
         self.assertEqual(self.window.findChildren(QSplitter), [])
 
+    def test_window_uses_codex_like_chinese_ui_font(self):
+        self.assertEqual(self.window.font().family(), "Microsoft YaHei UI")
+        self.assertEqual(self.window.parameter_table.font().family(), "Microsoft YaHei UI")
+
     def test_preview_table_uses_readable_codex_scale(self):
-        self.assertGreaterEqual(self.window.parameter_table.font().pixelSize(), 16)
-        self.assertGreaterEqual(self.window.parameter_table.verticalHeader().defaultSectionSize(), 44)
-        self.assertGreaterEqual(self.window.parameter_table.horizontalHeader().height(), 44)
+        self.assertGreaterEqual(self.window.parameter_table.font().pointSize(), 10)
+        self.assertGreaterEqual(self.window.parameter_table.verticalHeader().defaultSectionSize(), 40)
+        self.assertGreaterEqual(self.window.parameter_table.horizontalHeader().height(), 40)
+
+    def test_tube_sheet_type_uses_source_dropdown_options(self):
+        row = self.value_row("管板类型")
+        combo = self.window.parameter_table.cellWidget(row, 1)
+        self.assertIsInstance(combo, QComboBox)
+        self.assertFalse(combo.isEditable())
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())], list("abcdef"))
+
+    def test_piping_stage_uses_source_editor_types_and_options(self):
+        self.window.session.current_stage_index = 1
+        self.window.render_stage()
+
+        pass_combo = self.window.parameter_table.cellWidget(self.value_row("管程程数"), 1)
+        self.assertIsInstance(pass_combo, QComboBox)
+        self.assertFalse(pass_combo.isEditable())
+        self.assertEqual(
+            [pass_combo.itemText(i) for i in range(pass_combo.count())],
+            ["2", "4", "6", "8", "10", "12"],
+        )
+
+        diameter_combo = self.window.parameter_table.cellWidget(self.value_row("换热管外径 do"), 1)
+        self.assertIsInstance(diameter_combo, QComboBox)
+        self.assertTrue(diameter_combo.isEditable())
+        self.assertIn("25", [diameter_combo.itemText(i) for i in range(diameter_combo.count())])
+
+        length_combo = self.window.parameter_table.cellWidget(self.value_row("换热管公称长度 LN"), 1)
+        self.assertIsInstance(length_combo, QComboBox)
+        self.assertTrue(length_combo.isEditable())
+        self.assertIn("4500", [length_combo.itemText(i) for i in range(length_combo.count())])
+
+        plain_row = self.value_row("旁路挡板宽度")
+        self.assertIsNone(self.window.parameter_table.cellWidget(plain_row, 1))
+        self.assertTrue(self.window.parameter_table.item(plain_row, 1).flags() & Qt.ItemIsEditable)
+
+    def test_combo_edit_updates_review_session(self):
+        self.window.session.current_stage_index = 1
+        self.window.render_stage()
+        row = self.value_row("换热管布置方式")
+        combo = self.window.parameter_table.cellWidget(row, 1)
+        combo.setCurrentText("跨中")
+        combo.activated[str].emit("跨中")
+        self.assertEqual(self.window.session.current_parameters["换热管布置方式"]["value"], "跨中")
+        self.assertEqual(self.window.parameter_table.item(row, 1).text(), "跨中")
+
+    def test_rerender_replaces_combo_widgets_instead_of_stacking_them(self):
+        self.window.session.current_stage_index = 1
+        self.window.render_stage()
+        first = self.window.parameter_table.cellWidget(self.value_row("管程程数"), 1)
+        self.window.render_stage()
+        second = self.window.parameter_table.cellWidget(self.value_row("管程程数"), 1)
+        self.assertIsNot(first, second)
+        self.assertIsInstance(second, QComboBox)
 
     def test_preview_exposes_one_save_action(self):
         self.assertEqual(self.window.save_button.text(), "保留")

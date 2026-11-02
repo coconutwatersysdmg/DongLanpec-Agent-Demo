@@ -23,12 +23,9 @@ def main():
         font = Path(os.environ.get("SystemRoot", "C:/Windows")) / "Fonts" / "msyh.ttc"
         if font.exists():
             QFontDatabase.addApplicationFont(str(font))
-    app.setFont(QFont("Microsoft YaHei", 10))
+    app.setFont(QFont("Microsoft YaHei UI", 10))
     window = DesignWindow()
-    if args.screenshot:
-        window.show()
-    else:
-        window.showMaximized()
+    window.show()
 
     if args.demo or args.screenshot:
         window.start_with_bundle(DocumentBundle([]), "E-1001", "AEU", 700)

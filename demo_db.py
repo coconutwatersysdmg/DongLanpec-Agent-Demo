@@ -29,8 +29,9 @@ def _seed_context(product_type: str, dn: float) -> dict[str, dict[str, dict]]:
     dn = float(dn or 700)
     u_type = product_type in {"AEU", "BEU", "AKU", "BKU"}
     floating = product_type in {"AES", "BES"}
-    plate_type = "a（U形管）" if u_type else ("a（浮头式）" if floating else "b（固定管板）")
-    connection = "强度焊＋贴胀" if u_type or floating else "强度焊"
+    # Keep the same stored values shown by the production selectors.
+    plate_type = "a" if (u_type or floating) else "b"
+    connection = "强度焊接加贴胀管孔结构" if u_type or floating else "强度焊接的焊缝形式"
     return {
         "管板型式": {
             "产品型式": _p(product_type, source="模拟上游数据", evidence="模拟总Agent传入", editable=False),
@@ -48,7 +49,7 @@ def _seed_context(product_type: str, dn: float) -> dict[str, dict[str, dict]]:
             "管程程数": _p(2),
             "管程分程形式": _p("2程-水平分程"),
             "壳程程数": _p(1),
-            "换热管布置方式": _p("转角正方形"),
+            "换热管布置方式": _p("跨中"),
             "换热管外径 do": _p(25.0, "mm"),
             "换热管壁厚 δ": _p(2.0, "mm"),
             "换热管中心距 S": _p(32.0, "mm"),

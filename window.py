@@ -20,6 +20,7 @@ from demo_db import DemoRepository
 from document_reader import DocumentBundle
 from models import STAGES
 from pipeline import TubeBundleAgent
+from parameter_editors import ParamValueDelegate, build_combo, editor_spec, style_combo
 from review_session import ReviewSession
 from settings import load_settings, settings_dialog
 
@@ -55,8 +56,9 @@ class DesignWindow(QMainWindow):
         self._worker_callback = None
         self._worker_cancelled = False
         self.setWindowTitle("管束 AI 设计助手 Demo")
-        self.resize(1760, 1040)
-        self.setMinimumSize(1280, 760)
+        self.setFont(QFont("Microsoft YaHei UI", 10))
+        self.resize(1440, 900)
+        self.setMinimumSize(1100, 700)
         self._build_ui()
         self._apply_style()
         self.append_chat("assistant", "点击左侧“开始管束设计”。")
@@ -70,10 +72,10 @@ class DesignWindow(QMainWindow):
 
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(360)
+        self.sidebar.setFixedWidth(310)
         sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(26, 26, 26, 26)
-        sidebar_layout.setSpacing(10)
+        sidebar_layout.setContentsMargins(18, 22, 18, 20)
+        sidebar_layout.setSpacing(5)
         brand = QLabel("管束 AI")
         brand.setObjectName("sidebarTitle")
         sidebar_layout.addWidget(brand)
@@ -87,6 +89,24 @@ class DesignWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stop_background_task)
         self.stop_button.hide()
         sidebar_layout.addWidget(self.stop_button)
+        settings_label = QLabel("项目")
+        settings_label.setObjectName("sidebarSection")
+        sidebar_layout.addWidget(settings_label)
+        project_label = QLabel("管束设计演示")
+        project_label.setObjectName("projectLabel")
+        sidebar_layout.addWidget(project_label)
+        progress_label = QLabel("设计阶段")
+        progress_label.setObjectName("sidebarSection")
+        sidebar_layout.addWidget(progress_label)
+        self.stage_buttons = []
+        for index, text in enumerate(STAGES):
+            button = QPushButton(f"    {text}")
+            button.setObjectName("stageButton")
+            button.clicked.connect(lambda _checked=False, stage_index=index: self.open_stage(stage_index))
+            button.setEnabled(False)
+            self.stage_buttons.append(button)
+            sidebar_layout.addWidget(button)
+        self.progress_labels = self.stage_buttons
         settings_label = QLabel("通用设置")
         settings_label.setObjectName("sidebarSection")
         sidebar_layout.addWidget(settings_label)
@@ -103,18 +123,6 @@ class DesignWindow(QMainWindow):
         self.review_toggle_button.setEnabled(False)
         self.review_toggle_button.clicked.connect(self.toggle_review_drawer)
         sidebar_layout.addWidget(self.review_toggle_button)
-        progress_label = QLabel("设计进度")
-        progress_label.setObjectName("sidebarSection")
-        sidebar_layout.addWidget(progress_label)
-        self.stage_buttons = []
-        for index, text in enumerate(STAGES):
-            button = QPushButton(f"{index + 1}  {text}")
-            button.setObjectName("stageButton")
-            button.clicked.connect(lambda _checked=False, stage_index=index: self.open_stage(stage_index))
-            button.setEnabled(False)
-            self.stage_buttons.append(button)
-            sidebar_layout.addWidget(button)
-        self.progress_labels = self.stage_buttons
         sidebar_layout.addStretch()
         root_layout.addWidget(self.sidebar)
 
@@ -158,11 +166,11 @@ class DesignWindow(QMainWindow):
         review_layout.addWidget(self.stage_hint)
 
         self.parameter_table = QTableWidget(0, 5)
-        self.parameter_table.setFont(QFont("Microsoft YaHei", 12))
+        self.parameter_table.setFont(QFont("Microsoft YaHei UI", 11))
         self.parameter_table.setHorizontalHeaderLabels(("参数", "参数值", "单位", "来源", "证据/说明"))
         self.parameter_table.horizontalHeader().setStretchLastSection(True)
-        self.parameter_table.horizontalHeader().setMinimumHeight(48)
-        self.parameter_table.verticalHeader().setDefaultSectionSize(48)
+        self.parameter_table.horizontalHeader().setMinimumHeight(42)
+        self.parameter_table.verticalHeader().setDefaultSectionSize(42)
         self.parameter_table.setAlternatingRowColors(True)
         self.parameter_table.setShowGrid(True)
         self.parameter_table.setColumnWidth(0, 280)
@@ -170,6 +178,7 @@ class DesignWindow(QMainWindow):
         self.parameter_table.setColumnWidth(2, 90)
         self.parameter_table.setColumnWidth(3, 150)
         self.parameter_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.parameter_table.setItemDelegateForColumn(1, ParamValueDelegate(self.parameter_table))
         self.parameter_table.itemChanged.connect(self.on_table_item_changed)
         review_layout.addWidget(self.parameter_table, 1)
 
@@ -211,7 +220,7 @@ class DesignWindow(QMainWindow):
         composer_layout.setSpacing(6)
         self.prompt = QPlainTextEdit()
         self.prompt.setPlaceholderText("给管束 Agent 发送消息")
-        self.prompt.setFont(QFont("Microsoft YaHei", 11))
+        self.prompt.setFont(QFont("Microsoft YaHei UI", 11))
         self.prompt.setMinimumHeight(88)
         self.prompt.setMaximumHeight(132)
         composer_layout.addWidget(self.prompt)
@@ -227,33 +236,36 @@ class DesignWindow(QMainWindow):
 
     def _apply_style(self):
         self.setStyleSheet("""
-        QMainWindow, QWidget { background:#fbfaf8; color:#202124; font-family:'Microsoft YaHei'; font-size:15px; }
-        #sidebar { background:#f4f3ef; border-right:1px solid #e3e1dc; }
-        #sidebarTitle { font-size:27px; font-weight:700; padding:8px 5px 22px 5px; }
-        #sidebarSection { color:#7a7974; font-size:14px; font-weight:600; padding:24px 8px 6px 8px; }
+        QMainWindow, QWidget { background:#fbfaf8; color:#202124; font-family:'Microsoft YaHei UI'; font-size:10pt; }
+        #sidebar { background:#f7f7f4; border-right:1px solid #e7e5df; }
+        #sidebar QLabel { background:transparent; }
+        #sidebarTitle { font-size:20pt; font-weight:600; padding:4px 5px 20px 5px; }
+        #sidebarSection { color:#7b7d80; font-size:10pt; font-weight:500; padding:20px 8px 5px 8px; }
+        #projectLabel { color:#404246; font-size:11pt; padding:8px 10px 7px 8px; }
         #mainPanel { background:#ffffff; }
-        #mainTitle { font-size:22px; font-weight:700; padding:5px 0 14px 0; }
-        #sectionTitle { font-size:21px; font-weight:700; padding:2px 0 4px 0; }
-        #subTitle { font-size:15px; font-weight:700; color:#383838; }
-        #conversation { background:#ffffff; border:none; padding:10px 4px; font-size:16px; }
+        #mainTitle { font-size:15pt; font-weight:600; padding:5px 0 14px 0; }
+        #sectionTitle { font-size:14pt; font-weight:600; padding:2px 0 4px 0; }
+        #subTitle { font-size:10pt; font-weight:600; color:#383838; }
+        #conversation { background:#ffffff; border:none; padding:10px 4px; font-size:11pt; }
         #reviewCard { background:#ffffff; border:1px solid #e1dfda; border-radius:16px; }
         #composer { background:#ffffff; border:1px solid #d9d7d2; border-radius:18px; }
         #issueContainer { background:#fff8f7; border:1px solid #f0ceca; border-radius:10px; padding:10px; }
-        QPushButton { background:#fff; border:1px solid #d3d1cc; border-radius:9px; padding:9px 16px; font-size:15px; }
+        QPushButton { background:#fff; border:1px solid #d3d1cc; border-radius:8px; padding:8px 14px; font-size:10pt; }
         QPushButton:hover { background:#f1f0ec; }
         QPushButton:disabled { color:#aaa; background:#f3f3f0; }
-        #sideAction { text-align:left; border:none; background:transparent; padding:12px 14px; }
+        #sideAction { text-align:left; border:none; background:transparent; padding:9px 12px; }
         #sideAction:hover { background:#e8e7e2; }
-        #primarySideButton { text-align:left; background:#e8e7e2; border:none; font-weight:600; padding:13px 14px; }
-        #stageButton { text-align:left; border:none; background:transparent; padding:12px 14px; }
+        #primarySideButton { text-align:left; background:transparent; border:none; font-weight:500; padding:10px 12px; }
+        #primarySideButton:hover { background:#ecebe7; }
+        #stageButton { text-align:left; border:none; background:transparent; padding:9px 12px; }
         #stageButton:hover { background:#e8e7e2; }
         #primaryButton { min-width:112px; min-height:24px; background:#1f6fb2; color:white; border-color:#1f6fb2; font-weight:600; }
         #sendButton { background:#1f6fb2; color:white; border-color:#1f6fb2; font-weight:600; }
         #statusBadge { background:#fff4d6; color:#805b10; border:1px solid #e1c36d; border-radius:10px; padding:5px 10px; }
         QPlainTextEdit, QTableWidget { background:white; border:1px solid #dedcd7; border-radius:8px; }
-        QTableWidget { font-size:16px; alternate-background-color:#faf9f7; gridline-color:#ebe9e4; selection-background-color:#e7f1fb; selection-color:#202124; }
-        QHeaderView::section { background:#f3f2ef; color:#343434; padding:10px; border:none; border-right:1px solid #dfddd8; font-size:15px; font-weight:600; }
-        QTableWidget::item { padding:9px; }
+        QTableWidget { alternate-background-color:#faf9f7; gridline-color:#e3e4e6; selection-background-color:#e7f1fb; selection-color:#202124; }
+        QHeaderView::section { background:#f1f1ef; color:#343434; padding:8px; border:none; border-right:1px solid #dfddd8; font-size:10pt; font-weight:600; }
+        QTableWidget::item { padding:6px; }
         """)
 
     def append_chat(self, role, message):
@@ -350,16 +362,36 @@ class DesignWindow(QMainWindow):
             self.stage_title.setText(self.session.current_stage)
             self.review_status.setText(self.session.status)
             rows = self.session.current_parameters
+            # setRowCount alone can leave index widgets alive until the next event
+            # cycle.  Remove them first so repeated previews never stack controls.
+            for old_row in range(self.parameter_table.rowCount()):
+                widget = self.parameter_table.cellWidget(old_row, 1)
+                if widget is not None:
+                    self.parameter_table.removeCellWidget(old_row, 1)
+                    widget.deleteLater()
+            self.parameter_table.setRowCount(0)
             self.parameter_table.setRowCount(len(rows))
+            product_type = self.session.parameters.get("管板型式", {}).get("产品型式", {}).get("value", "")
             for row_index, (name, data) in enumerate(rows.items()):
                 values = (name, data.get("value", ""), data.get("unit", ""), data.get("source", ""), data.get("evidence", ""))
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(str(value))
-                    if column != 1 or data.get("derived"):
+                    if column != 1 or data.get("derived") or not data.get("editable", True):
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     if data.get("derived") and column == 1:
                         item.setBackground(QColor("#eef3f8"))
                     self.parameter_table.setItem(row_index, column, item)
+                if data.get("editable", True) and not data.get("derived"):
+                    spec = editor_spec(name, rows, product_type)
+                    if spec is not None:
+                        combo = build_combo(
+                            spec,
+                            data.get("value", ""),
+                            lambda text, row=row_index: self._commit_combo_value(row, text),
+                            self.parameter_table,
+                        )
+                        style_combo(combo)
+                        self.parameter_table.setCellWidget(row_index, 1, combo)
             self._clear_issues()
         finally:
             self._updating_table = False
@@ -380,8 +412,30 @@ class DesignWindow(QMainWindow):
     def on_table_item_changed(self, item):
         if self._updating_table or self.session is None or item.column() != 1:
             return
-        field = self.parameter_table.item(item.row(), 0).text()
-        value = item.text().strip()
+        self._commit_table_value(item.row(), item.text())
+
+    def _commit_combo_value(self, row: int, text: str) -> None:
+        """Route source-style combo edits through the same review-session path."""
+        if self._updating_table or self.session is None:
+            return
+        item = self.parameter_table.item(row, 1)
+        if item is not None:
+            blocked = self.parameter_table.blockSignals(True)
+            item.setText(str(text).strip())
+            self.parameter_table.blockSignals(blocked)
+        field_item = self.parameter_table.item(row, 0)
+        field = field_item.text() if field_item is not None else ""
+        self._commit_table_value(row, text)
+        # The production UI rebuilds the pass-form selector when pass count changes.
+        if field == "管程程数":
+            self.render_stage()
+
+    def _commit_table_value(self, row: int, raw_value) -> None:
+        field_item = self.parameter_table.item(row, 0)
+        if field_item is None:
+            return
+        field = field_item.text()
+        value = str(raw_value).strip()
         try:
             numeric = float(value)
             value = int(numeric) if numeric.is_integer() else numeric
@@ -439,6 +493,11 @@ class DesignWindow(QMainWindow):
                 item.setBackground(QColor("#ffe0e0"))
                 item.setForeground(QColor("#9b1c1c"))
                 item.setToolTip(issue.message)
+                combo = self.parameter_table.cellWidget(row, 1)
+                if combo is not None:
+                    style_combo(combo)
+                    combo.setStyleSheet(combo.styleSheet() + "QComboBox{border:1px solid #d04b4b;background:#fff4f4;}")
+                    combo.setToolTip(issue.message)
             if issue.recommended is not None:
                 button = QPushButton(f"{issue.field}：采用 {issue.recommended}")
                 button.clicked.connect(lambda _checked=False, issue_id=issue.issue_id: self.apply_recommendation(issue_id))
@@ -575,6 +634,10 @@ class DesignWindow(QMainWindow):
                     item.setForeground(QColor("#1e293b"))
                     if not self.session.current_parameters[self.parameter_table.item(row, 0).text()].get("derived"):
                         item.setBackground(QColor("#ffffff"))
+                combo = self.parameter_table.cellWidget(row, 1)
+                if combo is not None:
+                    style_combo(combo)
+                    combo.setToolTip("")
         finally:
             self._updating_table = previous
 
@@ -585,12 +648,12 @@ class DesignWindow(QMainWindow):
             frontier = next((index for index, approved in enumerate(self.session.approved) if not approved), len(STAGES))
         for index, label in enumerate(self.progress_labels):
             label.setEnabled(self.session is not None and index <= frontier)
-            if index < active:
-                label.setStyleSheet("background:#e8f7ef;color:#276749;border-radius:8px;padding:7px 6px;")
-            elif index == active:
-                label.setStyleSheet("background:#2368a8;color:white;border-radius:8px;padding:7px 6px;font-weight:600;")
+            if index == active:
+                label.setStyleSheet("background:#e9e9e5;color:#202124;border-radius:8px;padding:9px 12px;font-weight:500;text-align:left;")
+            elif index < active:
+                label.setStyleSheet("background:transparent;color:#5d6f61;border-radius:8px;padding:9px 12px;text-align:left;")
             else:
-                label.setStyleSheet("background:#eaf0f8;color:#5c6d82;border-radius:8px;padding:7px 6px;")
+                label.setStyleSheet("background:transparent;color:#85878b;border-radius:8px;padding:9px 12px;text-align:left;")
 
     def open_settings(self):
         self.config = settings_dialog(self, self.config)
