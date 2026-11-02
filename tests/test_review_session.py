@@ -73,6 +73,56 @@ class ReviewSessionTests(unittest.TestCase):
         self.assertEqual(self.session.approved, [False, False, False, False])
         self.assertIsNone(self.repo.load_stage(self.session.design_id, "管-板连接"))
 
+    def test_chat_actions_modify_future_stage_without_skipping_current_review(self):
+        result = self.session.apply_draft_actions([
+            {"stage": "轴向设计", "parameter": "折流板间距", "value": 500},
+            {"stage": "布管与元件", "parameter": "旁路挡板数量", "value": 3},
+        ])
+        self.assertEqual(self.session.current_stage, "管板型式")
+        self.assertEqual(self.session.parameters["轴向设计"]["折流板间距"]["value"], 500)
+        self.assertEqual(self.session.parameters["布管与元件"]["旁路挡板数量"]["value"], 3)
+        self.assertEqual(len(result["applied"]), 2)
+        self.assertEqual(result["rejected"], [])
+        self.assertEqual(
+            self.session.parameters["轴向设计"]["折流板间距"]["source"],
+            "AI 对话修改",
+        )
+
+    def test_chat_actions_reject_readonly_and_unknown_fields_without_losing_valid_edits(self):
+        result = self.session.apply_draft_actions([
+            {"stage": "管板型式", "parameter": "产品型式", "value": "BEU"},
+            {"stage": "轴向设计", "parameter": "不存在参数", "value": 1},
+            {"stage": "布管与元件", "parameter": "换热管中心距 S", "value": 34},
+        ])
+        self.assertEqual(self.session.parameters["管板型式"]["产品型式"]["value"], "AEU")
+        self.assertEqual(self.session.parameters["布管与元件"]["换热管中心距 S"]["value"], 34)
+        self.assertEqual(len(result["applied"]), 1)
+        self.assertEqual(len(result["rejected"]), 2)
+        self.assertTrue(any("只读" in item["reason"] for item in result["rejected"]))
+
+    def test_chat_edit_to_confirmed_earlier_stage_rolls_back_and_clears_downstream(self):
+        for _ in range(3):
+            self.assertTrue(self.session.run_review().passed)
+            self.session.confirm_and_advance()
+        self.assertEqual(self.session.current_stage, "轴向设计")
+
+        self.session.apply_draft_actions([
+            {"stage": "管板型式", "parameter": "R2", "value": 14},
+        ])
+
+        self.assertEqual(self.session.current_stage, "管板型式")
+        self.assertEqual(self.session.approved, [False, False, False, False])
+        self.assertIsNone(self.repo.load_stage(self.session.design_id, "管板型式"))
+        self.assertIsNone(self.repo.load_stage(self.session.design_id, "管-板连接"))
+
+    def test_chat_tube_length_edit_keeps_axial_link_in_sync(self):
+        self.session.apply_draft_actions([
+            {"stage": "布管与元件", "parameter": "换热管公称长度 LN", "value": 6000},
+        ])
+        linked = self.session.parameters["轴向设计"]["换热管公称长度 LN"]
+        self.assertEqual(linked["value"], 6000)
+        self.assertEqual(linked["source"], "联动计算")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,6 +83,72 @@ class ReviewSession:
         self.status = "待审核"
         self.last_result = None
 
+    def apply_draft_actions(self, actions) -> dict:
+        """Apply whitelisted chat actions to drafts without skipping review order."""
+        accepted, rejected, seen = [], [], set()
+        for action in list(actions or []):
+            if not isinstance(action, dict):
+                rejected.append({"reason": "动作格式无效"})
+                continue
+            stage = str(action.get("stage", "")).strip()
+            field = str(action.get("parameter", "")).strip()
+            clean = {"stage": stage, "parameter": field, "value": action.get("value")}
+            if stage not in self.parameters:
+                rejected.append(dict(clean, reason="未知设计阶段"))
+                continue
+            if field not in self.parameters[stage]:
+                rejected.append(dict(clean, reason="未找到该阶段参数"))
+                continue
+            if "value" not in action:
+                rejected.append(dict(clean, reason="缺少参数值"))
+                continue
+            row = self.parameters[stage][field]
+            if row.get("derived") or not row.get("editable", True):
+                rejected.append(dict(clean, reason="该参数为只读或联动计算值"))
+                continue
+            key = (stage, field)
+            if key in seen:
+                rejected.append(dict(clean, reason="同一参数重复修改"))
+                continue
+            seen.add(key)
+            accepted.append(clean)
+
+        if not accepted:
+            return {"applied": [], "rejected": rejected}
+
+        original_current_index = self.current_stage_index
+        earliest_index = min(STAGES.index(item["stage"]) for item in accepted)
+        if any(self.approved[earliest_index:]):
+            self.version = self.repository.clear_stages_from(
+                self.design_id, STAGES[earliest_index], self.version
+            )
+        for index in range(earliest_index, len(self.approved)):
+            self.approved[index] = False
+
+        applied = []
+        for item in accepted:
+            stage, field, value = item["stage"], item["parameter"], item["value"]
+            row = self.parameters[stage][field]
+            old_value = row.get("value")
+            row["value"] = value
+            row["source"] = "AI 对话修改"
+            row["evidence"] = "用户通过自然语言对话提出修改"
+            for conflict in self.conflicts:
+                if conflict.get("stage") == stage and conflict.get("parameter") == field:
+                    conflict["resolved"] = True
+            if stage == "布管与元件" and field == "换热管公称长度 LN":
+                linked = self.parameters["轴向设计"]["换热管公称长度 LN"]
+                linked["value"] = value
+                linked["source"] = "联动计算"
+                linked["evidence"] = "来自布管与元件阶段的换热管公称长度"
+            applied.append(dict(item, old_value=old_value))
+
+        if earliest_index <= original_current_index:
+            self.current_stage_index = earliest_index
+            self.status = "待审核"
+            self.last_result = None
+        return {"applied": applied, "rejected": rejected}
+
     def run_review(self):
         base = validate_stage(self.current_stage, self.current_parameters)
         issues = list(base.issues)
