@@ -4,6 +4,7 @@ import html
 import json
 import re
 import sqlite3
+from copy import deepcopy
 from types import SimpleNamespace
 
 from PyQt5.QtCore import QThread, Qt, pyqtSignal
@@ -15,7 +16,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from ai_support.api_client import DeepSeekClient
+from ai_support.api_client import DeepSeekClient, FIELD_ALIASES
 from demo_db import DemoRepository
 from document_reader import DocumentBundle
 from models import STAGES
@@ -55,6 +56,7 @@ class DesignWindow(QMainWindow):
         self.worker = None
         self._worker_callback = None
         self._worker_cancelled = False
+        self.chat_history = []
         self.setWindowTitle("管束 AI 设计助手 Demo")
         self.setFont(QFont("Microsoft YaHei UI", 10))
         self.resize(1440, 900)
@@ -83,18 +85,24 @@ class DesignWindow(QMainWindow):
         self.start_design_button.setObjectName("primarySideButton")
         self.start_design_button.clicked.connect(self.start_demo_design)
         sidebar_layout.addWidget(self.start_design_button)
+        self.new_chat_button = QPushButton("新建对话")
+        self.new_chat_button.setObjectName("sideAction")
+        self.new_chat_button.clicked.connect(self.clear_chat)
+        sidebar_layout.addWidget(self.new_chat_button)
         self.stop_button = QPushButton("停止")
         self.stop_button.setObjectName("sideAction")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop_background_task)
         self.stop_button.hide()
         sidebar_layout.addWidget(self.stop_button)
-        settings_label = QLabel("项目")
+        settings_label = QLabel("历史对话")
         settings_label.setObjectName("sidebarSection")
         sidebar_layout.addWidget(settings_label)
-        project_label = QLabel("管束设计演示")
-        project_label.setObjectName("projectLabel")
-        sidebar_layout.addWidget(project_label)
+        self.conversation_list = QListWidget()
+        self.conversation_list.setObjectName("conversationList")
+        self.conversation_list.setMaximumHeight(92)
+        self.conversation_list.addItem("当前管束设计")
+        sidebar_layout.addWidget(self.conversation_list)
         progress_label = QLabel("设计阶段")
         progress_label.setObjectName("sidebarSection")
         sidebar_layout.addWidget(progress_label)
@@ -132,10 +140,14 @@ class DesignWindow(QMainWindow):
         main_layout.setContentsMargins(38, 26, 38, 26)
         main_layout.setSpacing(16)
         header = QHBoxLayout()
-        title = QLabel("管束设计")
-        title.setObjectName("mainTitle")
-        header.addWidget(title)
+        self.chat_title = QLabel("管束设计对话")
+        self.chat_title.setObjectName("mainTitle")
+        header.addWidget(self.chat_title)
         header.addStretch()
+        self.clear_chat_button = QPushButton("清空对话")
+        self.clear_chat_button.setObjectName("headerAction")
+        self.clear_chat_button.clicked.connect(self.clear_chat)
+        header.addWidget(self.clear_chat_button)
         main_layout.addLayout(header)
         self.conversation = QTextBrowser()
         self.conversation.setObjectName("conversation")
@@ -221,15 +233,15 @@ class DesignWindow(QMainWindow):
         self.prompt = QPlainTextEdit()
         self.prompt.setPlaceholderText("给管束 Agent 发送消息")
         self.prompt.setFont(QFont("Microsoft YaHei UI", 11))
-        self.prompt.setMinimumHeight(88)
-        self.prompt.setMaximumHeight(132)
+        self.prompt.setMinimumHeight(64)
+        self.prompt.setMaximumHeight(96)
         composer_layout.addWidget(self.prompt)
         send_row = QHBoxLayout()
         send_row.addStretch()
-        send = QPushButton("发送")
-        send.setObjectName("sendButton")
-        send.clicked.connect(self.send_note)
-        send_row.addWidget(send)
+        self.send_button = QPushButton("发送")
+        self.send_button.setObjectName("sendButton")
+        self.send_button.clicked.connect(self.send_note)
+        send_row.addWidget(self.send_button)
         composer_layout.addLayout(send_row)
         main_layout.addWidget(composer)
         root_layout.addWidget(self.main_panel, 1)
@@ -242,6 +254,9 @@ class DesignWindow(QMainWindow):
         #sidebarTitle { font-size:20pt; font-weight:600; padding:4px 5px 20px 5px; }
         #sidebarSection { color:#7b7d80; font-size:10pt; font-weight:500; padding:20px 8px 5px 8px; }
         #projectLabel { color:#404246; font-size:11pt; padding:8px 10px 7px 8px; }
+        #conversationList { background:transparent; border:none; outline:0; padding:0; }
+        #conversationList::item { padding:9px 10px; border-radius:8px; }
+        #conversationList::item:selected { background:#e8f0ff; color:#245fb8; }
         #mainPanel { background:#ffffff; }
         #mainTitle { font-size:15pt; font-weight:600; padding:5px 0 14px 0; }
         #sectionTitle { font-size:14pt; font-weight:600; padding:2px 0 4px 0; }
@@ -261,6 +276,8 @@ class DesignWindow(QMainWindow):
         #stageButton:hover { background:#e8e7e2; }
         #primaryButton { min-width:112px; min-height:24px; background:#1f6fb2; color:white; border-color:#1f6fb2; font-weight:600; }
         #sendButton { background:#1f6fb2; color:white; border-color:#1f6fb2; font-weight:600; }
+        #headerAction { border:none; background:transparent; color:#74777c; }
+        #headerAction:hover { color:#202124; background:#f3f3f0; }
         #statusBadge { background:#fff4d6; color:#805b10; border:1px solid #e1c36d; border-radius:10px; padding:5px 10px; }
         QPlainTextEdit, QTableWidget { background:white; border:1px solid #dedcd7; border-radius:8px; }
         QTableWidget { alternate-background-color:#faf9f7; gridline-color:#e3e4e6; selection-background-color:#e7f1fb; selection-color:#202124; }
@@ -269,12 +286,25 @@ class DesignWindow(QMainWindow):
         """)
 
     def append_chat(self, role, message):
-        label = "你" if role == "user" else "管束 Agent"
-        color = "#e8f2ff" if role == "user" else "#eef7f1"
-        self.conversation.append(
-            f'<div style="margin:7px 2px;padding:10px;border-radius:8px;background:{color};">'
-            f'<b>{html.escape(label)}</b><br>{html.escape(str(message)).replace(chr(10), "<br>")}</div>'
-        )
+        text = str(message)
+        self.chat_history.append({"role": role, "content": text})
+        safe = html.escape(text).replace(chr(10), "<br>")
+        if role == "user":
+            block = (
+                '<div style="margin:12px 2px 12px 22%;text-align:right;">'
+                '<div style="display:inline-block;text-align:left;padding:10px 14px;'
+                'border:1px solid #cfe0fb;border-radius:14px;background:#f7fbff;">'
+                f'<b style="color:#245fb8;">你</b><br>{safe}</div></div>'
+            )
+        else:
+            block = (
+                '<div style="margin:12px 18% 12px 2px;text-align:left;">'
+                '<div style="display:inline-block;padding:4px 2px;">'
+                f'<b style="color:#087f70;">管束助手</b><br>{safe}</div></div>'
+            )
+        self.conversation.append(block)
+        scrollbar = self.conversation.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def set_review_drawer_visible(self, visible: bool) -> None:
         if visible and self.session is not None:
@@ -306,12 +336,16 @@ class DesignWindow(QMainWindow):
     def _accept_prepared(self, prepared):
         self.prepared = prepared
         self.session = ReviewSession(prepared, self.repository)
-        self.append_chat("assistant", "预览已生成。")
+        self.chat_title.setText(f"{prepared.equipment_id} · 管束设计")
+        self.conversation_list.clear()
+        self.conversation_list.addItem(prepared.equipment_id)
+        self.conversation_list.setCurrentRow(0)
+        self.append_chat("assistant", "四个阶段的设计草稿已生成。你可以直接用自然语言补充要求，也可以点击左侧“查看预览”。")
         if self.prepared.conflicts:
             self.append_chat("assistant", f"有 {len(self.prepared.conflicts)} 条问题或冲突，已保留给你人工判断，不会自动覆盖参数。")
         self.save_button.setEnabled(True)
         self.render_stage()
-        self.set_review_drawer_visible(True)
+        self.set_review_drawer_visible(False)
 
     def _start_worker(self, fn, callback):
         if self.worker is not None and self.worker.isRunning():
@@ -339,6 +373,7 @@ class DesignWindow(QMainWindow):
 
     def _worker_finished(self):
         self.stop_button.setEnabled(False)
+        self.send_button.setEnabled(True)
         if self.worker is not None:
             self.worker.deleteLater()
         self.worker = None
@@ -659,39 +694,118 @@ class DesignWindow(QMainWindow):
         self.config = settings_dialog(self, self.config)
         self.append_chat("assistant", "AI 设置已更新。" if self.config.configured else "当前为离线模式。")
 
-    def apply_chat_request(self, text: str) -> bool:
+    def _local_chat_actions(self, text: str) -> list[dict]:
         if self.session is None:
+            return []
+        aliases_by_field = {}
+        for alias, canonical in FIELD_ALIASES.items():
+            aliases_by_field.setdefault(canonical, []).append(alias)
+        candidates = []
+        for stage, rows in self.session.parameters.items():
+            for field, data in rows.items():
+                if data.get("derived") or not data.get("editable", True):
+                    continue
+                names = [field] + aliases_by_field.get(field, [])
+                candidates.append((max(map(len, names)), stage, field, data, names))
+        actions, used_fields = [], set()
+        for _length, stage, field, data, names in sorted(candidates, reverse=True):
+            if field in used_fields:
+                continue
+            matched_name = next((name for name in sorted(names, key=len, reverse=True) if name in text), None)
+            if not matched_name:
+                continue
+            suffix = text.split(matched_name, 1)[1]
+            number = re.search(r"(?:改成|改为|设为|设置为|调整为|增加到|改)?\s*(-?\d+(?:\.\d+)?)", suffix)
+            value = None
+            if number is not None:
+                numeric = float(number.group(1))
+                value = int(numeric) if numeric.is_integer() else numeric
+            else:
+                spec = editor_spec(
+                    field,
+                    self.session.parameters[stage],
+                    self.session.parameters["管板型式"]["产品型式"]["value"],
+                )
+                if spec is not None:
+                    value = next((option for option in spec.options if option in suffix), None)
+            if value is not None:
+                actions.append({"stage": stage, "parameter": field, "value": value})
+                used_fields.add(field)
+        return actions
+
+    def apply_chat_request(self, text: str) -> bool:
+        actions = self._local_chat_actions(text)
+        if not actions:
             return False
-        for field, data in sorted(self.session.current_parameters.items(), key=lambda item: len(item[0]), reverse=True):
-            if field not in text:
-                continue
-            number = re.search(r"-?\d+(?:\.\d+)?", text.split(field, 1)[1])
-            if number is None:
-                continue
-            if data.get("derived"):
-                self.append_chat("assistant", f"{field} 由程序计算，不能直接修改。")
-                return False
-            value = float(number.group())
-            value = int(value) if value.is_integer() else value
-            try:
-                self.session.apply_edit(field, value)
-            except (KeyError, ValueError):
-                self.append_chat("assistant", f"{field} 不能直接修改。")
-                return False
+        return self.handle_chat_result({
+            "reply": "已按你的要求更新设计草稿。",
+            "actions": actions,
+            "rejected": [],
+        })
+
+    def handle_chat_result(self, result) -> bool:
+        if self.session is None:
+            self.append_chat("assistant", "请先点击“开始管束设计”。")
+            return False
+        result = result if isinstance(result, dict) else {}
+        execution = self.session.apply_draft_actions(result.get("actions", []))
+        rejected = list(result.get("rejected", [])) + list(execution.get("rejected", []))
+        lines = [str(result.get("reply", "")).strip() or "我已经检查了这条要求。"]
+        applied = execution.get("applied", [])
+        if applied:
+            lines.append("\n已更新草稿：")
+            for item in applied:
+                lines.append(
+                    f"• {item['stage']}｜{item['parameter']}：{item.get('old_value', '')} → {item.get('value', '')}"
+                )
+            lines.append("\n这些修改尚未入库，到对应阶段检查并点击“保留”后才会保存。")
+        if rejected:
+            lines.append("\n未执行：")
+            for item in rejected:
+                target = "｜".join(filter(None, [str(item.get("stage", "")), str(item.get("parameter", ""))])) or "该要求"
+                lines.append(f"• {target}：{item.get('reason', '无法执行')}")
+        self.append_chat("assistant", "\n".join(lines))
+        if applied:
             self.render_stage()
-            self.set_review_drawer_visible(True)
-            self.append_chat("assistant", f"已将 {field} 改为 {value}，确认无误后点击保留。")
-            return True
-        return False
+            self.review_toggle_button.setEnabled(True)
+        return bool(applied)
 
     def send_note(self):
         text = self.prompt.toPlainText().strip()
         if not text:
             return
-        self.append_chat("user", text)
-        if not self.apply_chat_request(text):
-            self.append_chat("assistant", "已记录。")
         self.prompt.clear()
+        if self.worker is not None and self.worker.isRunning():
+            self.append_chat("assistant", "上一条要求还在处理中，请稍候。")
+            return
+        self.append_chat("user", text)
+        if self.session is None:
+            self.append_chat("assistant", "请先点击左侧“开始管束设计”，生成草稿后我才能修改参数。")
+            return
+        if self.config.configured:
+            client = DeepSeekClient(self.config)
+            history = deepcopy(self.chat_history[:-1])
+            context = deepcopy(self.session.parameters)
+            current_stage = self.session.current_stage
+            self.send_button.setEnabled(False)
+            self._start_worker(
+                lambda: client.chat(history, context, current_stage, text),
+                self.handle_chat_result,
+            )
+            return
+        if not self.apply_chat_request(text):
+            self.append_chat(
+                "assistant",
+                "离线模式暂时只能识别明确的参数修改，例如“折流板间距改成 500”。如需正常问答和更灵活的表达，请在 AI 设置中填写 DeepSeek API Key。",
+            )
+
+    def clear_chat(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.append_chat("assistant", "当前要求仍在处理中，完成后再新建对话。")
+            return
+        self.conversation.clear()
+        self.chat_history = []
+        self.append_chat("assistant", "对话已清空，可以继续描述你的管束设计要求。")
 
     def closeEvent(self, event):
         if self.worker is not None and self.worker.isRunning():

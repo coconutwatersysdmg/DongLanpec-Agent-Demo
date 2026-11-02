@@ -58,14 +58,15 @@ class WindowTests(unittest.TestCase):
             fresh.close()
             fresh.deleteLater()
 
-    def test_start_design_uses_hidden_demo_context_and_opens_real_preview(self):
+    def test_start_design_uses_hidden_demo_context_and_keeps_chat_primary(self):
         fresh = DesignWindow(repository=self.repo)
         fresh.config = APIConfig(api_key="")
         try:
             fresh.start_demo_design()
             self.assertIsNotNone(fresh.session)
             self.assertEqual(fresh.prepared.base_context["管板型式"]["产品型式"]["value"], "AEU")
-            self.assertFalse(fresh.review_panel.isHidden())
+            self.assertTrue(fresh.review_panel.isHidden())
+            self.assertTrue(fresh.review_toggle_button.isEnabled())
             self.assertGreater(fresh.parameter_table.rowCount(), 5)
         finally:
             fresh.close()
@@ -80,8 +81,8 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.session.status, "待审核")
         self.assertTrue(self.window.save_button.isEnabled())
 
-    def test_prepared_design_opens_review_drawer_when_user_action_is_needed(self):
-        self.assertFalse(self.window.review_panel.isHidden())
+    def test_prepared_design_keeps_review_drawer_collapsed_until_requested(self):
+        self.assertTrue(self.window.review_panel.isHidden())
         self.assertTrue(self.window.review_toggle_button.isEnabled())
 
     def test_collapsed_review_drawer_can_be_reopened_from_header(self):
@@ -104,6 +105,9 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.sidebar.maximumWidth(), self.window.sidebar.minimumWidth())
         self.assertIs(self.window.review_panel.parentWidget(), self.window.main_panel)
         self.assertEqual(self.window.findChildren(QSplitter), [])
+        self.assertEqual(self.window.new_chat_button.text(), "新建对话")
+        self.assertEqual(self.window.clear_chat_button.text(), "清空对话")
+        self.assertLessEqual(self.window.prompt.minimumHeight(), 72)
 
     def test_window_uses_codex_like_chinese_ui_font(self):
         self.assertEqual(self.window.font().family(), "Microsoft YaHei UI")
@@ -165,6 +169,53 @@ class WindowTests(unittest.TestCase):
         second = self.window.parameter_table.cellWidget(self.value_row("管程程数"), 1)
         self.assertIsNot(first, second)
         self.assertIsInstance(second, QComboBox)
+
+    def test_offline_chat_can_immediately_modify_future_stage_draft(self):
+        self.window.config = APIConfig(api_key="")
+        self.window.prompt.setPlainText("折流板间距改成 500")
+        self.window.send_note()
+
+        self.assertEqual(self.window.session.current_stage, "管板型式")
+        self.assertEqual(self.window.session.parameters["轴向设计"]["折流板间距"]["value"], 500)
+        transcript = self.window.conversation.toPlainText()
+        self.assertIn("轴向设计", transcript)
+        self.assertIn("折流板间距", transcript)
+        self.assertIn("450.0 → 500", transcript)
+
+    def test_structured_chat_result_reports_applied_and_rejected_actions(self):
+        self.window.handle_chat_result({
+            "reply": "我检查了这两个要求。",
+            "actions": [
+                {"stage": "布管与元件", "parameter": "旁路挡板数量", "value": 3},
+                {"stage": "管板型式", "parameter": "产品型式", "value": "BEU"},
+            ],
+            "rejected": [{"stage": "不存在", "parameter": "未知", "value": 1, "reason": "未知设计阶段"}],
+        })
+
+        transcript = self.window.conversation.toPlainText()
+        self.assertIn("我检查了这两个要求", transcript)
+        self.assertIn("旁路挡板数量", transcript)
+        self.assertIn("2 → 3", transcript)
+        self.assertIn("只读", transcript)
+        self.assertIn("未知设计阶段", transcript)
+        self.assertEqual(self.window.session.parameters["布管与元件"]["旁路挡板数量"]["value"], 3)
+        self.assertEqual(self.window.session.parameters["管板型式"]["产品型式"]["value"], "AEU")
+
+    def test_configured_chat_starts_background_request_and_blocks_duplicate_send(self):
+        self.window.config = APIConfig(api_key="secret")
+        self.window.prompt.setPlainText("帮我看看当前参数是否合理")
+        with patch.object(self.window, "_start_worker") as start_worker:
+            self.window.send_note()
+        start_worker.assert_called_once()
+        self.assertFalse(self.window.send_button.isEnabled())
+
+    def test_clear_chat_keeps_design_draft_but_resets_transcript(self):
+        design_id = self.window.session.design_id
+        self.window.append_chat("user", "临时消息")
+        self.window.clear_chat()
+        self.assertEqual(self.window.session.design_id, design_id)
+        self.assertNotIn("临时消息", self.window.conversation.toPlainText())
+        self.assertIn("继续描述", self.window.conversation.toPlainText())
 
     def test_preview_exposes_one_save_action(self):
         self.assertEqual(self.window.save_button.text(), "保留")
