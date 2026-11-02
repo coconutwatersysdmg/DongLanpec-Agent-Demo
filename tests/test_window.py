@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QTextCursor
 from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QGraphicsView, QMessageBox, QSplitter, QTabWidget
 
 from ai_support.api_client import APIConfig
@@ -216,6 +217,43 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.session.design_id, design_id)
         self.assertNotIn("临时消息", self.window.conversation.toPlainText())
         self.assertIn("继续描述", self.window.conversation.toPlainText())
+
+    def test_chat_places_user_bubble_on_right_and_agent_reply_on_left(self):
+        self.window.append_chat("user", "右侧用户消息")
+        self.window.append_chat("assistant", "左侧助手回复")
+        self.app.processEvents()
+
+        user_row, assistant_row = self.window.conversation.message_rows[-2:]
+        self.assertIsNotNone(user_row.layout().itemAt(0).spacerItem())
+        self.assertEqual(user_row.layout().itemAt(1).widget().property("chatRole"), "user")
+        self.assertEqual(assistant_row.layout().itemAt(0).widget().property("chatRole"), "assistant")
+        self.assertIsNotNone(assistant_row.layout().itemAt(1).spacerItem())
+
+    def test_enter_sends_message_and_clears_input(self):
+        self.window.config = APIConfig(api_key="")
+        self.window.prompt.setPlainText("折流板间距改成 500")
+        self.window.prompt.moveCursor(QTextCursor.End)
+
+        QTest.keyClick(self.window.prompt, Qt.Key_Return)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.prompt.toPlainText(), "")
+        self.assertEqual(self.window.session.parameters["轴向设计"]["折流板间距"]["value"], 500)
+        self.assertEqual(
+            [item for item in self.window.chat_history if item["role"] == "user"][-1]["content"],
+            "折流板间距改成 500",
+        )
+
+    def test_shift_enter_inserts_newline_without_sending(self):
+        history_before = list(self.window.chat_history)
+        self.window.prompt.setPlainText("第一行")
+        self.window.prompt.moveCursor(QTextCursor.End)
+
+        QTest.keyClick(self.window.prompt, Qt.Key_Return, Qt.ShiftModifier)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.prompt.toPlainText(), "第一行\n")
+        self.assertEqual(self.window.chat_history, history_before)
 
     def test_preview_exposes_one_save_action(self):
         self.assertEqual(self.window.save_button.text(), "保留")

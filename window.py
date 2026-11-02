@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-import html
 import json
 import re
 import sqlite3
 from copy import deepcopy
 from types import SimpleNamespace
 
-from PyQt5.QtCore import QThread, Qt, pyqtSignal
+from PyQt5.QtCore import QThread, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView, QDialog, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-    QListWidget, QTableWidget, QTableWidgetItem, QTextBrowser,
+    QListWidget, QScrollArea, QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser,
     QVBoxLayout, QWidget,
 )
 
@@ -41,6 +40,106 @@ class TaskThread(QThread):
         except Exception as exc:
             if not self.isInterruptionRequested():
                 self.failed.emit(str(exc))
+
+
+class MessageInput(QPlainTextEdit):
+    send_requested = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not (event.modifiers() & Qt.ShiftModifier):
+            event.accept()
+            self.send_requested.emit()
+            return
+        super().keyPressEvent(event)
+
+
+class ChatTranscript(QScrollArea):
+    """Widget-backed transcript so message alignment is not dependent on rich-text CSS support."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.message_rows = []
+        self._messages = []
+        self._content = QWidget()
+        self._content.setObjectName("chatContent")
+        self._layout = QVBoxLayout(self._content)
+        self._layout.setContentsMargins(8, 10, 8, 10)
+        self._layout.setSpacing(16)
+        self._layout.addStretch()
+        self.setWidget(self._content)
+
+    def append_message(self, role: str, text: str) -> None:
+        role = "user" if role == "user" else "assistant"
+        row = QWidget()
+        row.setObjectName("chatRow")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 2, 0, 2)
+        row_layout.setSpacing(0)
+
+        message = QFrame()
+        message.setProperty("chatRole", role)
+        message.setObjectName("userBubble" if role == "user" else "assistantMessage")
+        message.setMaximumWidth(780)
+        if role == "assistant":
+            message.setMinimumWidth(680)
+        message.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        message_layout = QHBoxLayout(message)
+        message_layout.setContentsMargins(13 if role == "user" else 0, 9 if role == "user" else 2,
+                                          13 if role == "user" else 0, 9 if role == "user" else 2)
+        message_layout.setSpacing(11)
+
+        if role == "assistant":
+            avatar = QLabel("AI")
+            avatar.setObjectName("assistantAvatar")
+            avatar.setAlignment(Qt.AlignCenter)
+            avatar.setFixedSize(28, 28)
+            message_layout.addWidget(avatar, 0, Qt.AlignTop)
+
+        body = QWidget()
+        body.setObjectName("chatBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(3)
+        name = QLabel("你" if role == "user" else "管束助手")
+        name.setObjectName("userName" if role == "user" else "assistantName")
+        content = QLabel(str(text))
+        content.setObjectName("chatMessageText")
+        content.setWordWrap(True)
+        content.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        content.setMaximumWidth(700)
+        body_layout.addWidget(name)
+        body_layout.addWidget(content)
+        message_layout.addWidget(body)
+
+        if role == "user":
+            row_layout.addStretch()
+            row_layout.addWidget(message, 0, Qt.AlignRight | Qt.AlignTop)
+        else:
+            row_layout.addWidget(message, 0, Qt.AlignLeft | Qt.AlignTop)
+            row_layout.addStretch()
+
+        self._layout.insertWidget(self._layout.count() - 1, row)
+        self.message_rows.append(row)
+        self._messages.append((role, str(text)))
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _scroll_to_bottom(self) -> None:
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def clear(self) -> None:
+        for row in self.message_rows:
+            self._layout.removeWidget(row)
+            row.deleteLater()
+        self.message_rows.clear()
+        self._messages.clear()
+
+    def toPlainText(self) -> str:
+        labels = {"user": "你", "assistant": "管束助手"}
+        return "\n".join(f"{labels[role]}\n{text}" for role, text in self._messages)
 
 
 class DesignWindow(QMainWindow):
@@ -149,9 +248,8 @@ class DesignWindow(QMainWindow):
         self.clear_chat_button.clicked.connect(self.clear_chat)
         header.addWidget(self.clear_chat_button)
         main_layout.addLayout(header)
-        self.conversation = QTextBrowser()
+        self.conversation = ChatTranscript()
         self.conversation.setObjectName("conversation")
-        self.conversation.setOpenExternalLinks(False)
         main_layout.addWidget(self.conversation, 1)
 
         self.review_panel = QFrame()
@@ -230,13 +328,18 @@ class DesignWindow(QMainWindow):
         composer_layout = QVBoxLayout(composer)
         composer_layout.setContentsMargins(14, 12, 14, 10)
         composer_layout.setSpacing(6)
-        self.prompt = QPlainTextEdit()
+        self.prompt = MessageInput()
         self.prompt.setPlaceholderText("给管束 Agent 发送消息")
         self.prompt.setFont(QFont("Microsoft YaHei UI", 11))
         self.prompt.setMinimumHeight(64)
         self.prompt.setMaximumHeight(96)
+        self.prompt.send_requested.connect(self.send_note)
         composer_layout.addWidget(self.prompt)
         send_row = QHBoxLayout()
+        send_row.addStretch()
+        shortcut_hint = QLabel("Enter 发送 · Shift+Enter 换行")
+        shortcut_hint.setObjectName("shortcutHint")
+        send_row.addWidget(shortcut_hint)
         send_row.addStretch()
         self.send_button = QPushButton("发送")
         self.send_button.setObjectName("sendButton")
@@ -261,7 +364,15 @@ class DesignWindow(QMainWindow):
         #mainTitle { font-size:15pt; font-weight:600; padding:5px 0 14px 0; }
         #sectionTitle { font-size:14pt; font-weight:600; padding:2px 0 4px 0; }
         #subTitle { font-size:10pt; font-weight:600; color:#383838; }
-        #conversation { background:#ffffff; border:none; padding:10px 4px; font-size:11pt; }
+        #conversation, #chatContent, #chatRow, #chatBody { background:#ffffff; border:none; }
+        #userBubble { background:#f5f9ff; border:1px solid #cfe0fb; border-radius:14px; }
+        #assistantMessage { background:transparent; border:none; }
+        #assistantAvatar { background:#eef7f1; color:#087f70; border-radius:14px; font-size:8pt; font-weight:700; }
+        #userName { color:#245fb8; font-weight:600; font-size:10pt; }
+        #assistantName { color:#087f70; font-weight:600; font-size:10pt; }
+        #chatMessageText { color:#202124; font-size:11pt; line-height:1.45; }
+        #assistantMessage QLabel, #userBubble QLabel { background:transparent; }
+        #shortcutHint { color:#92959a; font-size:9pt; }
         #reviewCard { background:#ffffff; border:1px solid #e1dfda; border-radius:16px; }
         #composer { background:#ffffff; border:1px solid #d9d7d2; border-radius:18px; }
         #issueContainer { background:#fff8f7; border:1px solid #f0ceca; border-radius:10px; padding:10px; }
@@ -288,23 +399,7 @@ class DesignWindow(QMainWindow):
     def append_chat(self, role, message):
         text = str(message)
         self.chat_history.append({"role": role, "content": text})
-        safe = html.escape(text).replace(chr(10), "<br>")
-        if role == "user":
-            block = (
-                '<div style="margin:12px 2px 12px 22%;text-align:right;">'
-                '<div style="display:inline-block;text-align:left;padding:10px 14px;'
-                'border:1px solid #cfe0fb;border-radius:14px;background:#f7fbff;">'
-                f'<b style="color:#245fb8;">你</b><br>{safe}</div></div>'
-            )
-        else:
-            block = (
-                '<div style="margin:12px 18% 12px 2px;text-align:left;">'
-                '<div style="display:inline-block;padding:4px 2px;">'
-                f'<b style="color:#087f70;">管束助手</b><br>{safe}</div></div>'
-            )
-        self.conversation.append(block)
-        scrollbar = self.conversation.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        self.conversation.append_message(role, text)
 
     def set_review_drawer_visible(self, visible: bool) -> None:
         if visible and self.session is not None:
