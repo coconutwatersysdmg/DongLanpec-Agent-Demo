@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
-STAGES = ("管板型式", "布管与元件", "管-板连接", "轴向设计")
+STAGES = ("管板型式", "布管", "管-板连接", "轴向设计")
 
 
 @dataclass

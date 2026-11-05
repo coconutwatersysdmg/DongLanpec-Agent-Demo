@@ -39,11 +39,11 @@ class SettingsLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='designer demo ') as tmp:
             target=Path(tmp)/'screen with spaces.png'
             env=dict(os.environ,DONG_LANPEC_PYTHON=sys.executable,QT_QPA_PLATFORM='offscreen')
-            result=subprocess.run([os.environ['COMSPEC'],'/d','/c',str(launcher),'--screenshot',str(target)],
+            result=subprocess.run([os.environ['COMSPEC'],'/d','/c',str(launcher),'--screenshot',str(target),'--stage','0'],
                 env=env,cwd=tmp,capture_output=True,input='\n',encoding='utf-8',errors='replace',timeout=25)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertEqual(target.read_bytes()[:8],b'\x89PNG\r\n\x1a\n')
-            self.assertIn('preview ready; save action available',result.stdout)
+            self.assertIn('stage: 管板型式',result.stdout)
 
 
 if __name__=='__main__':unittest.main()

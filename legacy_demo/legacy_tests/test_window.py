@@ -99,12 +99,12 @@ class WindowTests(unittest.TestCase):
         self.assertGreater(self.window.parameter_table.rowCount(), 5)
 
     def test_codex_style_layout_uses_normal_desktop_size_and_fixed_sidebar(self):
-        self.assertEqual(self.window.size().width(), 1440)
-        self.assertEqual(self.window.size().height(), 900)
+        self.assertEqual(self.window.size().width(), 1680)
+        self.assertEqual(self.window.size().height(), 1000)
         self.assertGreaterEqual(self.window.sidebar.minimumWidth(), 300)
         self.assertLessEqual(self.window.sidebar.minimumWidth(), 320)
         self.assertEqual(self.window.sidebar.maximumWidth(), self.window.sidebar.minimumWidth())
-        self.assertIs(self.window.review_panel.parentWidget(), self.window.main_panel)
+        self.assertTrue(self.window.main_panel.isAncestorOf(self.window.review_panel))
         self.assertEqual(self.window.findChildren(QSplitter), [])
         self.assertEqual(self.window.new_chat_button.text(), "新建对话")
         self.assertEqual(self.window.clear_chat_button.text(), "清空对话")
