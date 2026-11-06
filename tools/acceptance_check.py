@@ -31,6 +31,7 @@ def main() -> int:
     app = QApplication(sys.argv[:1])
 
     import models
+    from models import STAGES
     from bundle import params as bundle_params
     from bundle.page import TubeLayoutPage
     from db.production import ProductionRepository, SaveFailed
@@ -921,6 +922,115 @@ def main() -> int:
         len(heights) == 1,
         "26.1 参数弹窗内各控件等高、标签固定列宽（版式统一）",
         f"控件高度 {sorted(heights)}",
+    )
+
+    # 27. 起始 Tab 按产品型式（My_Piping: BEM/NEN/AEM/NEN(H) → 管板型式，其余 → 布管）
+    saved_type = window.session.product_type
+    picks = {}
+    for product in ("AEU", "BEU", "AKU", "BEM", "NEN", "AEM", "NEN(H)"):
+        window.session.product_type = product
+        picks[product] = window._pick_initial_stage()
+    window.session.product_type = saved_type
+    check(
+        all(picks[p] == 1 for p in ("AEU", "BEU", "AKU"))
+        and all(picks[p] == 0 for p in ("BEM", "NEN", "AEM", "NEN(H)"))
+        and window.session.current_index == window._initial_stage,
+        "27 管束起始 Tab 按产品型式（BEM/NEN/AEM/NEN(H) 进管板型式，其余进布管）",
+        "、".join(f"{k}→{STAGES[v]}" for k, v in picks.items()),
+    )
+
+    # 27.1 保留确认弹窗：只说“进入下一阶段”，按钮是 是 / 否
+    dialog = window._build_keep_box("管板型式")
+    texts = [dialog.yes_button.text(), dialog.no_button.text()]
+    body = " ".join(
+        label.text() for label in dialog.findChildren(QLabel) if label.text()
+    )
+    dialog.deleteLater()
+    check(
+        texts == ["是", "否"] and "Tab" not in body and "tab" not in body
+        and "进入下一阶段" in body,
+        "27.1 保留确认弹窗不再提 Tab，按钮是 是 / 否",
+        f"按钮 {texts}，正文“{body.strip()}”",
+    )
+
+    # 28. 中间挡管：隔板槽两侧各选一根，挡管落在连线与槽轴线的交点
+    page.clear_selection()
+    grooves = page._groove_pairs()
+    groove_pair = grooves[1] if len(grooves) > 1 else None
+    block_ok = False
+    if groove_pair:
+        page.select_centers(list(groove_pair))
+        page.place_block_tube()
+        tubes = [c for c in page.components if c["kind"] == "block_tube"]
+        axis = page._groove_axis()
+        block_ok = bool(tubes) and all(
+            (abs(t["center"][1]) < 1e-6 if axis == "y" else abs(t["center"][0]) < 1e-6)
+            for t in tubes
+        )
+    # 同一排/同一侧的两根管：源程序会拒绝
+    bad_pair = [c for c in page.current_centers() if c[1] > 1e-6][:2]
+    page.clear_selection()
+    page.select_centers(bad_pair)
+    before_bad = len([c for c in page.components if c["kind"] == "block_tube"])
+    page.place_block_tube()
+    after_bad = len([c for c in page.components if c["kind"] == "block_tube"])
+    ok_point, point_error = page._block_tube_point(tuple(bad_pair))
+    check(
+        block_ok and before_bad == after_bad and point_error
+        and "同一隔板槽两侧" in point_error,
+        "28 中间挡管只认“隔板槽两侧各一根”，挡管落在槽轴线上",
+        f"有效对 → 挡管 {[t['center'] for t in page.components if t['kind'] == 'block_tube']}；"
+        f"同侧两管被拒：{point_error}",
+    )
+
+    # 28.1 中间挡板：隔板槽两侧第一排；同侧/同排一律拒绝并给原文提示
+    side, reason = page._center_baffle_check(tuple(groove_pair)) if groove_pair else (None, "")
+    bad_side, bad_reason = page._center_baffle_check(tuple(bad_pair))
+    check(
+        side == "horizontal" and not reason and not bad_side
+        and "同一隔板槽两侧" in (bad_reason or "") or
+        (side == "horizontal" and not reason and not bad_side
+         and "隔板槽两侧第一排" in (bad_reason or "")),
+        "28.1 中间挡板必须隔板槽两侧第一排（照 center_dangban 原文提示）",
+        f"有效对 side={side}；同侧两管：{bad_reason}",
+    )
+
+    # 29. 对称分布：自由拉杆 / 普通拉杆 / 旁路挡板都按 4 象限铺
+    page.undo()
+    page.undo()
+    page.clear_selection()
+    counts = {}
+    for cmd, kind in (("布置自由拉杆", "free_rod"), ("布置普通拉杆", "rod"), ("布置旁路挡板", "bypass")):
+        before = len([c for c in page.components if c["kind"] == kind])
+        window._handle_local_command(cmd)
+        card = window.placement_cards[-1] if window.placement_cards else None
+        if card is not None and card.confirm_button.isEnabled():
+            card.confirm_button.click()
+        counts[kind] = len([c for c in page.components if c["kind"] == kind]) - before
+    check(
+        counts["free_rod"] == 4 and counts["rod"] == 4 and counts["bypass"] == 4,
+        "29 勾“对称分布”时自由拉杆/普通拉杆/旁路挡板都铺 4 个",
+        f"自由拉杆 {counts['free_rod']}、普通拉杆 {counts['rod']}、旁路挡板 {counts['bypass']}",
+    )
+
+    # 29.1 防冲板两根参照管不再要求同一排（斜跨也可以）
+    page.clear_selection()
+    pool = sorted(page.current_centers(), key=lambda c: (-round(c[1], 3), c[0]))
+    diagonal = None
+    for first in pool[:4]:
+        for second in pool[4:]:
+            if abs(first[1] - second[1]) > 1.0 and abs(first[0] - second[0]) > 1.0:
+                diagonal = (first, second)
+                break
+        if diagonal:
+            break
+    window._handle_local_command("上方布置1块平板形防冲板")
+    card = window.placement_cards[-1] if window.placement_cards else None
+    error_text = card._preview["rows"][0]["error"] if card is not None else "无卡片"
+    check(
+        diagonal is not None and not error_text,
+        "29.1 防冲板不再自造“两根参照管要在同一排”的限制",
+        f"跨排参照管 {diagonal} 校验结果={error_text or '通过'}",
     )
 
     # 20. 前序修改 → 下游失效

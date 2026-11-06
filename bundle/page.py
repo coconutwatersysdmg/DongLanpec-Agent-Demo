@@ -1389,6 +1389,24 @@ class TubeLayoutPage(QWidget):
             return [(tuple(candidate[0]), tuple(candidate[1]))]
         return []
 
+    def _symmetry_pairs(self, pairs) -> list[tuple]:
+        """一对参照管按“对称分布”补出另一侧的一对（挡管/挡板通用）。
+
+        正式程序 `center_dangban.on_center_dangban_click` / `build_center_dangguan`
+        在勾选对称分布时都先对选点做 `judge_linkage_x/y`：一对参照管在槽的另一侧
+        再落一块（挡板）/一根（挡管）。落点仍由真实管孔算出，不编造坐标。
+        """
+        out: list[tuple] = []
+        seen: set = set()
+        for pair in pairs or []:
+            for one in [tuple(pair), *self._symmetry_pair_partners(pair)]:
+                key = tuple(sorted((round(p[0], 6), round(p[1], 6)) for p in one))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(tuple(one))
+        return out
+
     def place_rod(self, free: bool = False) -> None:
         centers = self._require_selection()
         if not centers:
@@ -1397,9 +1415,13 @@ class TubeLayoutPage(QWidget):
             ParamField("拉杆形式", "combo", ("焊接拉杆", "螺纹拉杆")),
             ParamField("拉杆直径", "combo", TIE_ROD_DIAMETERS),
         ]
-        standard = self._param_text("拉杆数量") or "-"
-        existing = sum(1 for c in self.components if c["kind"] in {"rod", "free_rod"})
-        hint = f"已选中 {len(centers)} 个管孔 · 标准要求数量 {standard} · 已有 {existing} 根"
+        # 提示文案照正式程序拉杆弹窗里的那句（按公称直径/拉杆直径查标准表）
+        standard = self._param_text("拉杆数量")
+        hint = (
+            f"根据标准要求，拉杆数量不应小于 {standard} 根"
+            if str(standard).strip()
+            else "当前拉杆直径无拉杆数量标准要求"
+        )
         values = self._ask("拉杆参数设置", fields, hint)
         if values is None:
             return
@@ -1436,30 +1458,38 @@ class TubeLayoutPage(QWidget):
         pairs = self._require_pairs("中间挡管")
         if not pairs:
             return
+        # 正式程序 prompt_center_dangguan_params：弹窗里只有“安装方式”一项
         values = self._ask(
             "中间挡管参数设置",
             [ParamField("中间挡管安装方式", "combo", ("贯穿", "分割"))],
-            f"共选中 {len(pairs) * 2} 个管孔，将按 {len(pairs)} 组参照管布置挡管。",
         )
         if values is None:
             return
         self._write_back(values)
         self._push_undo()
         added = 0
-        # 对称分布勾选时，另一侧再补一根（正式程序 center_dangguan 的对称扩展）
-        for pair in [group for one in pairs for group in [one, *self._symmetry_pair_partners(one)]]:
-            center = self._block_tube_center(pair)
-            if abs(center[0]) < 1e-6 and abs(center[1]) < 1e-6:
+        # 正式程序 build_center_dangguan：每对参照管给出一个挡管位置（连线与隔板槽轴线的
+        # 交点）；对称分布勾选时另一侧再补一根
+        for pair in self._symmetry_pairs(pairs):
+            point, error = self._block_tube_point(pair)
+            if error:
+                self._warn("提示", error)
+                self._undo.pop()
+                return
+            if not self._is_midpoint(point, pair):
+                if not self._ask_yes_no("提示", "所选参照管连线非水平线，是否继续？"):
+                    continue
+            if abs(point[0]) < 1e-6 and abs(point[1]) < 1e-6:
                 continue
-            if center in self.removed:
+            if point in self.removed:
                 continue
-            self.removed.add(center)
-            self.components.append({"kind": "block_tube", "center": center})
+            self.removed.add(point)
+            self.components.append({"kind": "block_tube", "center": point})
             added += 1
         self._clear_selection_state()
         self.rebuild_scene()
         self.refresh_hole_table()
-        self.status_message.emit(f"已布置 {added} 个中间挡管（落在分程隔板轴线上）")
+        self.status_message.emit(f"已布置 {added} 个中间挡管（落在分程隔板槽上）")
 
     def place_plate(self, kind: str) -> None:
         if kind == "bypass":
@@ -1473,17 +1503,13 @@ class TubeLayoutPage(QWidget):
         if kind == "bypass":
             values = self._ask(
                 "旁路挡板参数设置",
-                [
-                    ParamField("旁路挡板厚度", "number", unit="mm", minimum=0.1),
-                    ParamField("旁路挡板宽度", "number", unit="mm", minimum=1.0),
-                ],
+                [ParamField("旁路挡板厚度", "number", unit="mm", minimum=0.1)],
             )
         else:
             values = self._ask(
                 "中间挡板参数设置",
                 [
                     ParamField("中间挡板厚度", "number", unit="mm", minimum=0.1),
-                    ParamField("中间挡板宽度", "number", unit="mm", minimum=1.0),
                     ParamField("中间挡板安装方式", "combo", ("贯穿", "分割")),
                 ],
             )
@@ -1493,15 +1519,31 @@ class TubeLayoutPage(QWidget):
         self._push_undo()
         placed = 0
         if kind == "bypass":
-            # 正式程序 side_dangban：每个参照管沿折流板切口方向各生成一块，延伸到壳壁
-            for center in centers:
-                self.components.append(dict(self._bypass_geometry(center), kind="bypass"))
-            placed = len(centers)
+            # 正式程序 side_dangban.on_side_block_click：勾选对称分布时按 judge_linkage
+            # 展开成 4 块，每个参照管沿折流板切口方向各生成一块，外边缘贴着折流板外径圆
+            targets = self._linkage_expand(centers) if self._symmetry else centers
+            widths = []
+            for center in targets:
+                geometry = self._bypass_geometry(center)
+                widths.append(max(float(v) for v in geometry["size"]))
+                self.components.append(dict(geometry, kind="bypass"))
+            placed = len(targets)
+            if widths:
+                self.set_parameter(
+                    "旁路挡板宽度", self._pretty(widths[0]), "人工布置", run_linkage=False
+                )
         else:
-            # 正式程序 center_dangban：两块参照管之间夹一块，长度取两管中心距 - do；
-            # 对称分布勾选时另一侧再补一块（center_dangban 的 judge_linkage_x/y 分支）
-            for pair in [group for one in pairs for group in [one, *self._symmetry_pair_partners(one)]]:
-                self.components.append(dict(self._pair_geometry("center_baffle", pair), kind="center_baffle"))
+            # 正式程序 center_dangban：先按“隔板槽两侧第一排”校验，两块参照管之间夹
+            # 一块，长度取两管中心距 − do − 2×孔桥宽度；勾选对称分布时另一侧再补一块
+            for pair in self._symmetry_pairs(pairs):
+                side, reason = self._center_baffle_check(pair)
+                if reason:
+                    self._warn("只允许对分程挡板两侧的换热管建立中间挡板！", reason)
+                    self._undo.pop()
+                    return
+                self.components.append(
+                    dict(self._pair_geometry("center_baffle", pair, side), kind="center_baffle")
+                )
                 placed += 1
         self._clear_selection_state()
         self.rebuild_scene()
@@ -1535,10 +1577,8 @@ class TubeLayoutPage(QWidget):
             ParamField("滑道切边高度", "number", unit="mm", minimum=0.0,
                        visible=lambda v: not is_round(v)),
         ]
-        values = self._ask(
-            "滑道参数设置", fields,
-            "滑道沿壳体内壁轴向布置，不占用换热管孔；数量 2 时按夹角对称放在底部两侧。",
-        )
+        # 正式程序滑道弹窗只有 11 个参数行，没有任何说明文字
+        values = self._ask("滑道参数设置", fields)
         if values is None:
             return
         self._write_back(values)
@@ -1640,12 +1680,14 @@ class TubeLayoutPage(QWidget):
         values = self._ask(
             "吊环螺钉参数设置",
             [
-                ParamField("吊环螺钉规格", "combo", ("M16", "M20", "M24", "M30", "M36")),
+                ParamField("吊环螺钉规格", "combo", (
+                    "M8", "M10", "M12", "M16", "M20", "M24", "M30", "M36",
+                    "M42", "M48", "M56", "M64", "M72×6", "M80×6", "M100×6",
+                )),
                 ParamField("吊环螺钉数量", "number", unit="个", minimum=1, maximum=64),
                 ParamField("吊环螺钉孔中心距", "number", unit="mm", minimum=0.0),
                 ParamField("吊环螺钉起始方位角", "number", unit="°", minimum=0, maximum=359.9),
             ],
-            "吊环螺钉沿管板外圆均布。",
         )
         if values is None:
             return
@@ -1680,10 +1722,7 @@ class TubeLayoutPage(QWidget):
             ParamField("B型板切口与中心线间距b", "number", unit="mm", minimum=0.0,
                        visible=double_bow),
         ]
-        values = self._ask(
-            "折流板参数设置", fields,
-            "折流/支持板外径与间距影响布管图中的折流板虚线圆和轴向设计页。",
-        )
+        values = self._ask("折流板参数设置", fields)
         if values is None:
             return
         self._write_back(values)
@@ -2047,11 +2086,14 @@ class TubeLayoutPage(QWidget):
                 out["note"] = "指定的换热管不可用"
                 return out
             if kind in {"rod", "free_rod"}:
-                # 拉杆的输入是“1 个种子管”，其余由 judge_linkage 展开
-                seed = wanted[0]
-                out["seeds"] = [seed]
-                group = [c for c in self._linkage_expand([seed], pool) if c in pool]
-                out["tubes"] = group[: item.count] or [seed]
+                # 拉杆的输入是“种子管”，根数由 judge_linkage 决定：
+                # 勾“对称分布”时 1 个种子就展开成 4 根，不是 1 根
+                picked: list = []
+                for seed in wanted:
+                    group = [c for c in self._linkage_expand([seed], pool) if c in pool]
+                    out["seeds"].append(seed)
+                    picked.extend([c for c in group if c not in picked])
+                out["tubes"] = picked or wanted[:1]
                 return out
             if ANCHORS.get(kind, 1) == 2 and len(wanted) % 2 == 0:
                 out["pairs"] = [tuple(wanted[i:i + 2]) for i in range(0, len(wanted), 2)]
@@ -2060,7 +2102,10 @@ class TubeLayoutPage(QWidget):
 
         # 拉杆 / 自由拉杆：1 个种子管 → judge_linkage（对称分布）/ 单轴镜像展开
         if kind in {"rod", "free_rod"}:
-            seeds = pick_centers(pool, min(len(pool), item.count * 2 + 2), item.region)
+            # count 是“要布置的根数”；一个种子管经 judge_linkage 会铺满 4 个象限，
+            # 所以种子数由展开结果凑到 count 为止（至少 1 个种子，源程序里
+            # 选 1 根就自动补成 4 根）
+            seeds = pick_centers(pool, min(len(pool), max(item.count, 1) * 2 + 4), item.region)
             picked: list = []
             for seed in seeds:
                 group = [
@@ -2073,7 +2118,7 @@ class TubeLayoutPage(QWidget):
                 picked.extend(group)
                 if len(picked) >= item.count:
                     break
-            out["tubes"] = picked[: item.count]
+            out["tubes"] = picked
             return out
 
         # 防冲板：圆弧形 / 平板形选 2 根参照管；焊接式不选管
@@ -2101,9 +2146,23 @@ class TubeLayoutPage(QWidget):
             out["tubes"] = [c for pair in out["pairs"] for c in pair]
             return out
 
-        # 中间挡板 / 中间挡管：2 根参照管（同一行或同一列，按分程隔板方向）
+        # 中间挡板 / 中间挡管：隔板槽两侧各选一根（源程序“同一隔板槽两侧各选一个参照管”）
         if kind in {"center_baffle", "block_tube"}:
-            out["pairs"] = pick_pairs(pool, item.count, item.region, self._anchor_orientation())
+            pairs = [p for p in self._groove_pairs() if p[0] in pool and p[1] in pool]
+            if kind == "block_tube":
+                # 正好跨在圆心上的那对，挡管会落到 (0,0)（没有可替换的管孔），跳过
+                usable = []
+                for one in pairs:
+                    point, error = self._block_tube_point(one)
+                    if error or (abs(point[0]) < 1e-6 and abs(point[1]) < 1e-6):
+                        continue
+                    usable.append(one)
+                pairs = usable
+            if item.region in {"top", "bottom", "left", "right"}:
+                reverse = item.region in {"bottom", "right"}
+                pairs = sorted(pairs, key=lambda p: (p[0][0] + p[0][1]), reverse=reverse)
+            # 勾“对称分布”时，源程序在另一侧再补一块挡板 / 一根挡管
+            out["pairs"] = self._symmetry_pairs(pairs[: max(1, item.count)])
             out["tubes"] = [c for pair in out["pairs"] for c in pair]
             return out
 
@@ -2181,7 +2240,16 @@ class TubeLayoutPage(QWidget):
         }
 
     def validate_anchors(self, item) -> str | None:
-        """方案卡里用户指定的参照管是否可用；返回错误文案（None 表示没问题）。"""
+        """方案卡里用户指定的参照管是否可用；返回错误文案（None 表示没问题）。
+
+        判据全部照抄正式程序，不再自造“必须在同一排/同一列”这种限制：
+        · 防冲板  `impingement_plate.build_impingement_plate`：只要求两根参照管；
+          “参照管中心连线”方式要求中心距 > do；折边角度过大导致顶部长度为负、
+          端点超出壳体大圆，都由几何计算直接报原文提示。
+        · 中间挡管 `center_dangguan.build_center_dangguan`：连线与隔板槽轴线交点必须
+          落在线段内，否则“所选参照管位置不合理，请在同一隔板槽两侧各选一个参照管!”
+        · 中间挡板 `center_dangban.check_partition_side_for_two`：必须隔板槽两侧第一排。
+        """
         from .placement import ANCHORS
 
         anchors = [tuple(a) for a in item.anchors]
@@ -2193,57 +2261,41 @@ class TubeLayoutPage(QWidget):
             if center not in pool:
                 return f"{self._fmt_pt(center)} 不是当前布管图上的换热管"
         needed = ANCHORS.get(item.kind, 1)
-        if needed:
-            if len(anchors) % needed:
-                return f"该元件每处需要 {needed} 根参照管，请成组选择"
-            if needed == 2:
-                do = self._float("换热管外径 do") or 25.0
-                # 防冲板永远跨“同一排”（选孔用 orient="row"）；挡板/挡管按分程隔板方向
-                orient = (
-                    "row"
-                    if item.kind in {"impingement", "impingement_folded", "impingement_welded"}
-                    else self._anchor_orientation()
-                )
-                for first, second in item.anchor_pairs:
-                    if math.hypot(second[0] - first[0], second[1] - first[1]) <= do + 1e-6:
-                        return "两根参照管挨得太近，板跨不出两管中心距"
-                    # 正式程序里板/挡管都跨“同一排相邻两管”，跨排会变成斜板
-                    if orient == "row" and abs(first[1] - second[1]) > 1.0:
-                        rows = [self.tube_row_col(c) or (0, 0) for c in (first, second)]
+        if needed and len(anchors) % needed:
+            # 源程序对 2 根参照管的元件统一提示这一句
+            return "选择换热管的数量不正确！"
+        if needed != 2:
+            return None
+
+        do = self._float("换热管外径 do") or 25.0
+        for first, second in item.anchor_pairs:
+            pair = (tuple(first), tuple(second))
+            span = math.hypot(second[0] - first[0], second[1] - first[1])
+            if item.kind in {"impingement", "impingement_folded", "impingement_welded"}:
+                form = self._impingement_form(item)
+                if form == impingement.FORM_WELDED:
+                    continue
+                if form == impingement.FORM_FLAT and span <= do + 1e-6:
+                    placement = str(
+                        item.overrides.get("放置位置") or self._param_text("放置位置")
+                    )
+                    if "中心连线" in placement:
                         return (
-                            f"两根参照管要在同一排：现在是第 {rows[0][0]} 行"
-                            f"和第 {rows[1][0]} 行"
+                            "两参照管中心距小于或等于换热管外径 do，"
+                            "无法按“参照管中心连线”方式绘制防冲板！"
                         )
-                    if orient == "col" and abs(first[0] - second[0]) > 1.0:
-                        cols = [self.tube_row_col(c) or (0, 0) for c in (first, second)]
-                        return (
-                            f"两根参照管要在同一列：现在是第 {cols[0][1]} 列"
-                            f"和第 {cols[1][1]} 列"
-                        )
-                if item.kind in {"impingement", "impingement_folded"}:
-                    form = self._impingement_form(item)
-                    if form == impingement.FORM_FOLDED:
-                        angle = self._float("防冲板折边角度")
-                        override = str(item.overrides.get("防冲板折边角度") or "").strip()
-                        if override:
-                            try:
-                                angle = float(override)
-                            except ValueError:
-                                angle = angle or 45.0
-                        need = impingement.required_span_for_folded(
-                            self._float("换热管外径 do") or 25.0,
-                            self._float("换热管中心距 S") or 32.0,
-                            angle or 45.0,
-                        )
-                        for first, second in item.anchor_pairs:
-                            span = math.hypot(
-                                second[0] - first[0], second[1] - first[1]
-                            )
-                            if span < need - 1e-6:
-                                return (
-                                    f"圆弧形折边需要中心距 ≥ {need:.0f} mm，"
-                                    f"这两根只有 {span:.0f} mm"
-                                )
+                try:
+                    self._impingement_geometry(form, pair, item.overrides)
+                except impingement.ImpingementError as exc:
+                    return str(exc)
+            elif item.kind == "block_tube":
+                _point, error = self._block_tube_point(pair)
+                if error:
+                    return error
+            elif item.kind == "center_baffle":
+                _side, reason = self._center_baffle_check(pair)
+                if reason:
+                    return reason
         return None
 
     def plan_param_rows(self, item) -> list[dict]:
@@ -2269,6 +2321,10 @@ class TubeLayoutPage(QWidget):
                 else:
                     value = str(current.get(name) or item.options.get(name) or "").strip()
             is_form = name.endswith("形式")
+            # 旁路挡板宽度是程序按“到圆边的距离 − 孔桥 − do/2”算出来的，不让手改
+            locked = item.kind == "bypass" and name == "旁路挡板宽度"
+            if locked:
+                value = self.preview_bypass_width(item) or value
             if is_form:
                 # 形式决定几何、也决定“要不要参照管”，选项以程序里的可选值为准
                 if item.kind.startswith("impingement") or "防冲板" in name:
@@ -2288,6 +2344,7 @@ class TubeLayoutPage(QWidget):
                 "kind": "choice" if is_form or spec.kind in {"combo", "combo_edit", "pattern"} else "number",
                 "options": options,
                 "form": is_form,
+                "locked": locked,
             })
         return rows
 
@@ -2377,6 +2434,21 @@ class TubeLayoutPage(QWidget):
             total += len(self.impingement_delete_centers(form, geometry, pair))
         return total
 
+    def preview_bypass_width(self, item) -> str:
+        """方案预览：旁路挡板宽度先按正式程序公式算一遍（卡片上只读显示）。
+
+        正式程序 `on_side_block_click` 也是先算宽度、把结果写进“旁路挡板宽度”参数，
+        再按这个宽度画板，所以卡片上的宽度必须是算出来的值，不是手填的 40。
+        """
+        try:
+            centers = self._resolve_item(item).get("tubes") or []
+            if not centers:
+                return ""
+            geometry = self._bypass_geometry(centers[0])
+            return self._pretty(max(float(v) for v in geometry["size"]))
+        except Exception:  # noqa: BLE001 - 预览算不出来就不显示，别把卡片弄挂
+            return ""
+
     def preview_placement(self, items) -> dict:
         """把方案解析成“选中的换热管”并在图上高亮；此时还没有任何元件落地。"""
         rows = []
@@ -2399,11 +2471,15 @@ class TubeLayoutPage(QWidget):
             if item.kind in {"impingement", "impingement_folded", "impingement_welded"}:
                 # 卡片上改了形式，标题也要跟着变（“圆弧形防冲板”→用户改成“平板形防冲板”）
                 label = f"{self._impingement_form(item)}防冲板"
+            # 挡管/挡板按“一对参照管 → 一块”，勾对称分布时一对会补成两对，块数按实际对数给
+            shown_count = item.count
+            if item.kind in {"center_baffle", "block_tube"} and resolution.get("pairs"):
+                shown_count = len(resolution["pairs"])
             rows.append({
                 "label": label,
                 "kind": item.kind,
                 "form": item.form,
-                "count": item.count,
+                "count": shown_count,
                 "anchors": self._anchor_text(item, resolution),
                 "params": self._param_summary(item),
                 "tubes": [self._tube_ref(c) for c in tubes],
@@ -2414,7 +2490,11 @@ class TubeLayoutPage(QWidget):
                 "deleted": deleted,
             })
             if item.occupying:
-                occupying += item.count
+                # 拉杆按“对称展开后的实际根数”占孔，挡管按参照管对数各占 1 个
+                if item.kind == "block_tube":
+                    occupying += len(resolution.get("pairs") or []) or item.count
+                else:
+                    occupying += len(tubes) or item.count
             deletes += deleted
             picked.extend(resolution.get("tubes") or [])
         holes = len(self.current_centers())
@@ -2431,9 +2511,132 @@ class TubeLayoutPage(QWidget):
         }
 
     # ------------------------------------------------------ 元件布置方案落地
+    def _groove_axis(self) -> str:
+        """分程隔板槽的走向：2 管程隔板水平（槽在 y=0），4/6 管程隔板竖直（槽在 x=0）。
+
+        照抄正式程序 `center_dangguan.build_center_dangguan`：
+        2 管程挡管落在 `(x_mid, 0)`，4/6 管程落在 `(0, y_mid)`。
+        """
+        return "x" if self._param_text("管程程数") in {"4", "6"} else "y"
+
+    def _groove_pairs(self) -> list[tuple]:
+        """隔板槽两侧第一排换热管的全部相邻管对。"""
+        from .placement import groove_pairs
+
+        return groove_pairs(self.selectable_centers(), self._groove_axis())
+
     def _anchor_orientation(self) -> str:
-        """分程隔板方向：2 管程隔板竖直（取同一行相邻两管），4/6 管程水平（取同一列）。"""
-        return "col" if self._param_text("管程程数") in {"4", "6"} else "row"
+        """同 `_groove_axis()` 的“行/列”写法（挡板/挡管取参照管的方向）。"""
+        return "col" if self._groove_axis() == "x" else "row"
+
+    @staticmethod
+    def _is_midpoint(point, pair) -> bool:
+        (x1, y1), (x2, y2) = pair
+        return abs(point[0] - (x1 + x2) / 2.0) < 1e-6 and abs(point[1] - (y1 + y2) / 2.0) < 1e-6
+
+    def _block_tube_point(self, pair):
+        """两根参照管连线与分程隔板槽轴线的交点（正式程序 `build_center_dangguan`）。
+
+        正式程序先算连线与 x 轴（y=0）、y 轴（x=0）的交点，只保留落在线段内的；
+        两个都在（跨槽又过中心）或都不在，都提示“所选参照管位置不合理，
+        请在同一隔板槽两侧各选一个参照管!”；只有一个时，交点就是挡管位置
+        （不是中点再问一句“所选参照管连线非水平线，是否继续？”）。
+        """
+        (x1, y1), (x2, y2) = pair
+        axis = self._groove_axis()
+        if axis == "y":                       # 水平隔板槽：要求一上一下
+            if not ((y1 > 1e-6 > y2) or (y2 > 1e-6 > y1)):
+                return None, "所选参照管位置不合理，请在同一隔板槽两侧各选一个参照管!"
+            if abs(y2 - y1) < 1e-9:
+                return None, "所选参照管位置不合理，请在同一隔板槽两侧各选一个参照管!"
+            ratio = (0.0 - y1) / (y2 - y1)
+            return (x1 + (x2 - x1) * ratio, 0.0), None
+        if not ((x1 > 1e-6 > x2) or (x2 > 1e-6 > x1)):   # 竖直隔板槽：要求一左一右
+            return None, "所选参照管位置不合理，请在同一隔板槽两侧各选一个参照管!"
+        if abs(x2 - x1) < 1e-9:
+            return None, "所选参照管位置不合理，请在同一隔板槽两侧各选一个参照管!"
+        ratio = (0.0 - x1) / (x2 - x1)
+        return (0.0, y1 + (y2 - y1) * ratio), None
+
+    def _center_baffle_check(self, pair):
+        """中间挡板参照管校验（照抄 `center_dangban.check_partition_side_for_two`）。
+
+        返回 (side, reason)：side = "horizontal"（水平隔板槽两侧）/ "vertical"
+        （竖直隔板槽两侧），reason 非空表示不允许布置。
+
+        正式程序用两个专门参数判“是不是隔板槽两侧第一排”：
+        `垂直隔板槽两侧相邻管中心距 LB_SN`（水平槽）与
+        `水平隔板槽两侧相邻管中心距 LB_SNH`（竖直槽），并辅以“至中心线第 1 排”的
+        行号判断。本程序没有这两个参数，等价做法是直接看几何：两管在槽的两侧、
+        中间没有别的管子（就是第一排），且跨距等于该列/该行的槽宽。
+        """
+        (x1, y1), (x2, y2) = pair
+        dx = abs(x1 - x2)
+        dy = abs(y1 - y2)
+        passes = self._param_text("管程程数")
+        row1 = self.tube_row_col((x1, y1))
+        row2 = self.tube_row_col((x2, y2))
+        pool = [(float(x), float(y)) for x, y in self.current_centers()]
+
+        def nothing_between(vertical_strict: bool) -> bool:
+            for x, y in pool:
+                if vertical_strict:                    # 同一列（x 相同）
+                    if abs(x - x1) > 1e-6:
+                        continue
+                    if min(y1, y2) + 1e-6 < y < max(y1, y2) - 1e-6:
+                        return False
+                else:                                  # 同一行（y 相同）
+                    if abs(y - y1) > 1e-6:
+                        continue
+                    if min(x1, x2) + 1e-6 < x < max(x1, x2) - 1e-6:
+                        return False
+            return True
+
+        # 水平隔板槽两侧：同一列、一上一下，且紧贴槽（中间没有别的管）
+        horizontal_ok = (
+            dx < 1.0 and (y1 * y2) < 0 and dy > 0 and nothing_between(True)
+        )
+        # 竖直隔板槽两侧：同一行、一左一右，且是紧贴槽的第一排
+        vertical_ok = (
+            dy < 1.0 and (x1 * x2) < 0 and dx > 0 and nothing_between(False)
+        )
+        if horizontal_ok and vertical_ok:
+            return None, "所选参照管位置不合理，请重新选择！"
+        if passes in {"4", "6"}:
+            side = "horizontal" if horizontal_ok else ("vertical" if vertical_ok else None)
+        else:
+            side = "horizontal" if horizontal_ok else None
+        if side is None:
+            return None, "只能选择隔板槽两侧第一排换热管孔作为中间挡板的参照管！"
+
+        # 范围过大：水平侧看列号差（2 管程允许相邻一列，6 管程允许到 3 列），
+        # 竖直侧看行号差
+        try:
+            if side == "horizontal" and row1 and row2:
+                delta = abs(abs(row1[1]) - abs(row2[1]))
+                limit = 3 if passes in {"4", "6"} else 1
+                if delta > limit:
+                    return None, "所选的2个换热管范围过大，请重新选择！"
+            elif side == "vertical" and row1 and row2:
+                if abs(abs(row1[0]) - abs(row2[0])) > 2:
+                    return None, "所选的2个换热管范围过大，请重新选择！"
+        except Exception:  # noqa: BLE001 - 行号算不出来就不拦
+            pass
+        return side, None
+
+    def _ask_yes_no(self, title: str, text: str) -> bool:
+        """正式程序里的“是否继续？”询问（按钮就是 是 / 否）。"""
+        if self.headless:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setIcon(QMessageBox.Question)
+        box.setText(text)
+        yes = box.addButton("是", QMessageBox.YesRole)
+        no = box.addButton("否", QMessageBox.NoRole)
+        box.setDefaultButton(no)
+        box.exec_()
+        return box.clickedButton() is yes
 
     def _impingement_geometry(self, form: str, pair=None, overrides: dict | None = None) -> dict:
         """防冲板三种形式的轮廓（照抄 `impingement_plate.build_impingement_plate`）。
@@ -2561,65 +2764,74 @@ class TubeLayoutPage(QWidget):
             deleted.append((key[0], -key[1]))  # 绘制坐标 -> 数学坐标
         return sorted(deleted)
 
-    def _pair_geometry(self, kind: str, pair) -> dict:
+    def _pair_geometry(self, kind: str, pair, side: str | None = None) -> dict:
         """按两根参照管的真实坐标算板类元件几何（照抄正式程序）。
 
-        `center_dangban.on_center_dangban_click` 要求“选中恰好 2 个换热管”：
-        板长取两管中心距 − do，两个参照管就是板的两个端点，模型既不给坐标也不给方位角。
+        `center_dangban.on_center_dangban_click` 要求“选中恰好 2 个换热管”，且必须
+        分程隔板槽两侧第一排；板长 = 两管中心距 − do − 2×名义孔桥宽度，两个参照管
+        就是板的两个端点，模型既不给坐标也不给方位角。
         防冲板另走 `_impingement_geometry()`（三种形式各不相同）。
         """
+        from .placement import nominal_bridge_width
+
         (x1, y1), (x2, y2) = pair
         do = self._float("换热管外径 do") or 25.0
         span = math.hypot(x2 - x1, y2 - y1)
         angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-        thickness = self._float("中间挡板厚度") or 6.0
-        length = max(span - do, do * 0.5)
+        name = "旁路挡板厚度" if kind == "bypass" else "中间挡板厚度"
+        thickness = self._float(name) or 6.0
+        length = max(span - do - 2.0 * nominal_bridge_width(do), do * 0.5)
         center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
         return {"center": center, "size": (length, thickness), "angle": angle}
 
-    def _block_tube_center(self, pair) -> tuple[float, float]:
-        """中间挡管落在分程隔板轴线上（正式程序 `build_center_dangguan`）。"""
-        (x1, y1), (x2, y2) = pair
-        if self._param_text("管程程数") in {"4", "6"}:
-            # 4/6 管程：隔板水平，挡管在 x=0 的竖直轴线上
-            if abs(x1 - x2) < 1e-6:
-                y_mid = (y1 + y2) / 2.0
-                return (0.0, y_mid if abs(y_mid) > 1e-6 else y1)
-            return (0.0, y1)
-        # 2 管程：隔板竖直，挡管在 y=0 的水平轴线上
-        if abs(y1 - y2) < 1e-6:
-            x_mid = (x1 + x2) / 2.0
-            # 两参照管正好跨过隔板中心时，退回用其中一根的 x（避免落到 (0,0)）
-            return (x_mid if abs(x_mid) > 1e-6 else x1, 0.0)
-        return (x1, 0.0)
+    def _bypass_geometry(self, center, pool=None) -> dict:
+        """旁路挡板：宽度按正式程序公式算，板的外边缘永远贴着折流/支持板外径圆。
 
-    def _bypass_geometry(self, center) -> dict:
-        """旁路挡板：从参照管沿折流板切口方向伸到壳体内壁。
-
-        正式程序 `side_dangban.on_side_block_click` 取选中管做参照，
-        水平切口方向走 `calculate_level_side_dangban_length`，板一直延伸到壳壁。
+        照抄 `side_dangban.calculate_level_side_dangban_length` /
+        `calculate_vertical_side_dangban_length`：
+        · 取同排（水平切口）最左侧 / 同列（竖直切口）最上侧的那根参照管，
+        算它到折流板圆边的距离 `distance = |圆边 − 该管坐标|`；
+        · 宽度 = |distance − 名义孔桥 − do/2|（板从圆边向里伸出的长度）；
+        · `build_single_side_dangban(_vertical)` 里板的外边缘就压在圆边上
+        （rect_x = min_x 或 max_x − 宽度 / rect_y = max_y − 长度 或 min_y），
+        所以挡板一定落在大圆里面。以前按壳体半径加半宽画，才会跑到圆外。
         """
+        from .placement import nominal_bridge_width
+
+        do = self._float("换热管外径 do") or 25.0
+        bridge = nominal_bridge_width(do)
         thickness = self._float("旁路挡板厚度") or 6.0
-        width = max(self._float("旁路挡板宽度") or 40.0, 40.0)
-        inner = self.result.big_r_di if self.result else 200.0
+        radius = (
+            self.result.baffle_r if self.result and self.result.baffle_r > 0
+            else self._shell_inner_radius()
+        )
+        if radius <= 0:
+            radius = 100.0
+        x, y = float(center[0]), float(center[1])
+        source = pool if pool is not None else self.selectable_centers()
+        pool = [(float(c[0]), float(c[1])) for c in source] or [(x, y)]
         vertical = "竖直" in (self._param_text("折流板切口方向") or "")
+
         if vertical:
-            edge = math.sqrt(max(inner ** 2 - center[0] ** 2, 0.0))
-            direction = 1.0 if center[1] >= 0 else -1.0
-            reach = max(edge - abs(center[1]), width * 0.5)
-            mid = (center[0], center[1] + direction * reach / 2.0)
-            angle = 90.0
-        else:
-            edge = math.sqrt(max(inner ** 2 - center[1] ** 2, 0.0))
-            direction = 1.0 if center[0] >= 0 else -1.0
-            reach = max(edge - abs(center[0]), width * 0.5)
-            mid = (center[0] + direction * reach / 2.0, center[1])
-            angle = 0.0
-        return {
-            "center": mid,
-            "size": (reach + width * 0.4, thickness),
-            "angle": angle,
-        }
+            column = [c for c in pool if abs(c[0] - x) < 1e-6]
+            near = max(column, key=lambda c: c[1]) if column else (x, y)
+            edge = math.sqrt(max(radius ** 2 - near[0] ** 2, 0.0))
+            width = abs(abs(edge - abs(near[1])) - bridge - do / 2.0)
+            width = min(max(width, 1.0), max(2.0 * edge, 1.0))
+            top_side = abs(edge - y) <= abs(y + edge)
+            outer = edge if top_side else -edge
+            mid = (x, outer - width / 2.0 if top_side else outer + width / 2.0)
+            return {"center": mid, "size": (thickness, width), "angle": 0.0}
+
+        row = [c for c in pool if abs(c[1] - y) < 1e-6]
+        near = min(row, key=lambda c: c[0]) if row else (x, y)
+        edge = math.sqrt(max(radius ** 2 - near[1] ** 2, 0.0))
+        width = abs(abs(edge - abs(near[0])) - bridge - do / 2.0)
+        width = min(max(width, 1.0), max(2.0 * edge, 1.0))
+        left_side = abs(x + edge) < abs(edge - x)
+        outer = -edge if left_side else edge
+        mid = (outer + width / 2.0 if left_side else outer - width / 2.0, y)
+        return {"center": mid, "size": (width, thickness), "angle": 0.0}
 
     def _slide_geometries(self) -> list[dict]:
         """滑道不选管：按 定位/形式/数量/方位角/夹角 沿壳体内壁布置。"""
@@ -2812,11 +3024,16 @@ class TubeLayoutPage(QWidget):
                 rows.append(row)
                 continue
 
-            # 5b) 中间挡板：必须落在两根相邻参照管上
+            # 5b) 中间挡板：必须落在隔板槽两侧第一排的两根参照管上
             if kind == "center_baffle":
                 pairs = self._resolve_item(item, pool)["pairs"]
                 for pair in pairs:
-                    geometry = self._pair_geometry(kind, pair)
+                    side, reason = self._center_baffle_check(pair)
+                    if reason:
+                        row["skipped"] += 1
+                        row["detail"] = reason
+                        continue
+                    geometry = self._pair_geometry(kind, pair, side)
                     self.components.append(dict(geometry, kind=kind))
                     used.update(pair)
                     row["placed"] += 1
@@ -2826,11 +3043,15 @@ class TubeLayoutPage(QWidget):
                 rows.append(row)
                 continue
 
-            # 6) 中间挡管：2 个参照管 → 挡管落在分程隔板轴线上
+            # 6) 中间挡管：2 个参照管 → 挡管落在连线与隔板槽轴线的交点上
             if kind == "block_tube":
                 pairs = self._resolve_item(item, pool)["pairs"]
                 for pair in pairs:
-                    center = self._block_tube_center(pair)
+                    center, error = self._block_tube_point(pair)
+                    if error:
+                        row["skipped"] += 1
+                        row["detail"] = error
+                        continue
                     if abs(center[0]) < 1e-6 and abs(center[1]) < 1e-6:
                         # 正式程序同样跳过落到圆心的挡管（没有可替换的管孔）
                         continue
@@ -2844,12 +3065,23 @@ class TubeLayoutPage(QWidget):
                 rows.append(row)
                 continue
 
-            # 7) 旁路挡板：每个参照管各一块，沿折流板切口方向到壳壁
+            # 7) 旁路挡板：每个参照管各一块，板的外边缘贴折流板外径圆；
+            #    勾“对称分布”时源程序走 judge_linkage，一个参照管铺 4 块
             if kind == "bypass":
-                for center in self._resolve_item(item, pool)["tubes"]:
-                    self.components.append(dict(self._bypass_geometry(center), kind="bypass"))
+                centers = self._resolve_item(item, pool)["tubes"]
+                targets = self._linkage_expand(centers, pool) if self._symmetry else centers
+                widths: list[float] = []
+                for center in targets:
+                    geometry = self._bypass_geometry(center, pool)
+                    widths.append(max(float(v) for v in geometry["size"]))
+                    self.components.append(dict(geometry, kind="bypass"))
                     used.add(center)
                     row["placed"] += 1
+                if widths and "旁路挡板宽度" in self.parameters:
+                    # 正式程序把算出来的宽度写回参数表，参数区显示的就是这个值
+                    self.set_parameter(
+                        "旁路挡板宽度", self._pretty(widths[0]), "AI 布置方案", run_linkage=False
+                    )
                 row["skipped"] = max(item.count - row["placed"], 0)
                 rows.append(row)
                 continue

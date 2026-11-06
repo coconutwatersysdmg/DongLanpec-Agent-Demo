@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon, QPainter, QPixmap
+from PyQt5.QtGui import QFont, QFontMetrics, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
@@ -167,6 +167,73 @@ class ParamField:
     tip: str = ""
 
 
+class ConfirmDialog(QDialog):
+    """是 / 否 二选一确认框（保留确认等弹窗用，按钮就是中文“是”“否”）。
+
+    不用 QMessageBox：一是原生按钮文案在不同系统上会退回 Yes/No，
+    二是它的版式和程序里别的弹窗不统一。
+    """
+
+    def __init__(self, title: str, text: str, detail: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(360)
+        self.setStyleSheet("QDialog{background:#ffffff;}")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 18, 22, 16)
+        root.setSpacing(12)
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        icon = QLabel("?")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(26, 26)
+        icon.setStyleSheet(
+            "QLabel{background:#2f6fe4;color:#ffffff;border-radius:13px;"
+            "font-size:13pt;font-weight:600;}"
+        )
+        head.addWidget(icon, 0, Qt.AlignTop)
+        message = QLabel(text)
+        message.setWordWrap(True)
+        message.setStyleSheet("QLabel{color:#1f2329;font-size:10.5pt;}")
+        head.addWidget(message, 1)
+        root.addLayout(head)
+
+        if detail:
+            hint = QLabel(detail)
+            hint.setWordWrap(True)
+            hint.setContentsMargins(36, 0, 0, 0)
+            hint.setStyleSheet("QLabel{color:#8a9099;font-size:9.5pt;}")
+            root.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(10)
+        buttons.addStretch()
+        self.no_button = QPushButton("否")
+        self.yes_button = QPushButton("是")
+        for button in (self.no_button, self.yes_button):
+            button.setCursor(Qt.PointingHandCursor)
+            button.setMinimumWidth(78)
+            button.setStyleSheet(
+                "QPushButton{background:#fff;border:1px solid #dcdde0;border-radius:7px;"
+                "padding:6px 18px;color:#1f2329;}"
+                "QPushButton:hover{background:#f5f7fa;}"
+            )
+        self.yes_button.setDefault(True)
+        self.yes_button.setStyleSheet(
+            "QPushButton{background:#2f6fe4;color:#fff;border:none;border-radius:7px;"
+            "padding:6px 20px;font-weight:600;}"
+            "QPushButton:hover{background:#2a63cc;}"
+        )
+        self.no_button.clicked.connect(self.reject)
+        self.yes_button.clicked.connect(self.accept)
+        buttons.addWidget(self.no_button)
+        buttons.addWidget(self.yes_button)
+        root.addLayout(buttons)
+
+
 class ComponentParamDialog(QDialog):
     """布置元件前的参数确认弹窗（正式程序同名弹窗的等价实现）。
 
@@ -174,7 +241,8 @@ class ComponentParamDialog(QDialog):
     不再用 QFormLayout 默认那套“灰标签 + 高高低低的控件”的旧面孔。
     """
 
-    LABEL_WIDTH = 112
+    LABEL_WIDTH = 112          # 最小标签列宽；实际按最长参数名撑开，绝不截断
+    LABEL_MAX_WIDTH = 260
 
     def __init__(self, title: str, fields: list[ParamField], values: dict,
                  hint: str = "", parent=None):
@@ -196,6 +264,20 @@ class ComponentParamDialog(QDialog):
         self._rows: dict[str, QWidget] = {}
         self._labels: dict[str, QWidget] = {}
 
+        # 标签列宽按最长参数名算：固定 112 会把“折流板切口方向”这类长名字截掉
+        label_font = QFont(self.font())
+        label_font.setPointSize(10)
+        metrics = QFontMetrics(label_font)
+        widest = max(
+            (metrics.horizontalAdvance(str(spec.name)) for spec in fields),
+            default=self.LABEL_WIDTH,
+        )
+        self.label_width = max(
+            self.LABEL_WIDTH, min(int(widest) + 10, self.LABEL_MAX_WIDTH)
+        )
+        # 弹窗整体宽度也要跟着放，否则标签放不下又会把输入框挤扁
+        self.setMinimumWidth(max(430, self.label_width + 300))
+
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 18, 22, 16)
         root.setSpacing(12 if hint else 14)
@@ -214,12 +296,13 @@ class ComponentParamDialog(QDialog):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(11)
-        grid.setColumnMinimumWidth(0, self.LABEL_WIDTH)
+        grid.setColumnMinimumWidth(0, self.label_width)
         grid.setColumnStretch(1, 1)
         for row_index, spec in enumerate(fields):
             label = QLabel(f"{spec.name}")
             label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            label.setFixedWidth(self.LABEL_WIDTH)
+            label.setFont(label_font)
+            label.setMinimumWidth(self.label_width)
             label.setStyleSheet("QLabel{color:#3d4653;font-size:10pt;}")
             self._labels[spec.name] = label
 

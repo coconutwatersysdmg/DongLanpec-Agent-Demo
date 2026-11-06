@@ -71,7 +71,7 @@ python main.py
 | `bundle/static/` | 正式程序示意图副本（分程形式、元件按钮、焊缝、管板形式等） |
 | `db/production.py` | 正式数据库只读查询 + 单事务写库计划 |
 | `ai_support/` | DeepSeek 客户端与结构化输出校验 |
-| `tools/acceptance_check.py` | 78 项端到端自检（真实操作图形/表格，不写库） |
+| `tools/acceptance_check.py` | 84 项端到端自检（真实操作图形/表格，不写库） |
 | `tests/` | 单元测试 + 端到端自检用例 |
 | `docs/交付说明.md` | 交付清单、运行/配置/演示步骤、已验证与未验证项、数据库排错 |
 | `legacy_demo/legacy_modules/` | 早期演示版本模块（已不被新实现引用，仅存档） |
@@ -92,7 +92,7 @@ DONGLANPEC_DB_PASSWORD / DONGLANPEC_DB_NAME
 
 ```bash
 python -m unittest discover -s tests -q          # 52 项（含端到端）
-python tools/acceptance_check.py                 # 78 项自检明细
+python tools/acceptance_check.py                 # 84 项自检明细
 python main.py --screenshot artifacts/stage1.png --stage 1   # 离屏截图
 ```
 

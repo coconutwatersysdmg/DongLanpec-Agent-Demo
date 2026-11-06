@@ -584,9 +584,6 @@ class PlacementPlanCard(QFrame):
             count = QLabel(f"× {row.get('count', 1)}")
             count.setObjectName("planCellMuted")
             title_line.addWidget(count)
-            delete_note = QLabel("")
-            delete_note.setObjectName("planDeleteNote")
-            title_line.addWidget(delete_note)
             title_line.addStretch()
             box.addLayout(title_line)
 
@@ -597,7 +594,6 @@ class PlacementPlanCard(QFrame):
                 "refs": [],
                 "params": [],
                 "seed_edited": False,
-                "delete_note": delete_note,
             }
 
             mode = entry["mode"]
@@ -756,10 +752,6 @@ class PlacementPlanCard(QFrame):
             refs = row.get("refs") or []
             for editor, ref in zip(entry["refs"], refs):
                 editor.set_ref(ref)
-            note = entry.get("delete_note")
-            if note is not None:
-                deleted = int(row.get("deleted") or 0)
-                note.setText(f"落位后删 {deleted} 个干涉管" if deleted else "")
 
     def _refresh_hint(self, problems: list[str]) -> None:
         holes = self._preview.get("holes", 0)
@@ -851,6 +843,7 @@ class DesignWindow(QMainWindow):
         self.config = load_settings()
         self.session: DesignSession | None = None
         self.pages: dict[int, QWidget] = {}
+        self._initial_stage = 0
         self.card: PreviewCard | None = None
         self.worker = None
         self._worker_callback = None
@@ -882,8 +875,8 @@ class DesignWindow(QMainWindow):
             "assistant",
             "你好，我是管束设计助手。\n"
             "点击左侧“开始管束设计”，我会读取正式数据库里前序模块的数据，按"
-            "“管板型式 → 布管 → 管-板连接 → 轴向设计”四个 Tab 生成草稿。\n"
-            "布管图形和右侧管孔数量表都可以直接操作；四个 Tab 都保留后才写库。",
+            "“管板型式 → 布管 → 管-板连接 → 轴向设计”四个阶段生成草稿。\n"
+            "布管图形和右侧管孔数量表都可以直接操作；四个阶段都保留后才写库。",
         )
 
     def _apply_default_split(self) -> None:
@@ -930,7 +923,7 @@ class DesignWindow(QMainWindow):
             button.clicked.connect(slot)
             sidebar_layout.addWidget(button)
 
-        stage_label = QLabel("设计 Tab")
+        stage_label = QLabel("设计阶段")
         stage_label.setObjectName("sidebarSection")
         sidebar_layout.addWidget(stage_label)
         self.stage_buttons: list[QPushButton] = []
@@ -1207,7 +1200,10 @@ class DesignWindow(QMainWindow):
         self.pages[0] = sheet_page
         sheet_payload = sheet_page.to_payload()
 
-        self._render_stage(0)
+        # 正式程序 My_Piping：BEM/NEN/AEM/NEN(H) 打开就停在“管板型式”，
+        # 其余型式停在“布管”（`self.header.setCurrentIndex(0/1)`）
+        self._initial_stage = self._pick_initial_stage()
+        self._render_stage(self._initial_stage)
         summary = [
             f"已接入正式数据库：{self.session.header_text()}",
             f"项目ID {self.session.project_id or '（库中为空）'}，产品型式 {self.session.product_type}",
@@ -1216,7 +1212,18 @@ class DesignWindow(QMainWindow):
             f"管板型式已按 {sheet_payload.get('管板类型', 'a')} 型生成，布管限定圆 DL="
             f"{sheet_payload.get('布管限定圆 DL')}",
         ]
-        self.append_chat("assistant", "\n".join(summary) + "\n\n请先检查“管板型式”，保留后我会自动进入“布管”。")
+        first_stage = STAGES[self._initial_stage]
+        self.append_chat(
+            "assistant",
+            "\n".join(summary)
+            + f"\n\n当前停在“{first_stage}”（{self.session.product_type} 的管束从这里开始），"
+            "检查无误后点“保留”。",
+        )
+
+    def _pick_initial_stage(self) -> int:
+        """正式程序 `My_Piping` 的初始 Tab：BEM/NEN/AEM/NEN(H) → 管板型式，其余 → 布管。"""
+        product = str(getattr(self.session, "product_type", "") or "").strip().upper()
+        return 0 if product in {"BEM", "NEN", "AEM", "NEN(H)"} else 1
 
     def _merge_defaults(self, params: dict, defaults: dict, upstream: dict) -> dict:
         merged: dict[str, dict] = {}
@@ -1375,8 +1382,9 @@ class DesignWindow(QMainWindow):
         frontier = self.session.next_unapproved
         if frontier is None:
             frontier = len(STAGES)
+        reachable = max(frontier, getattr(self, "_initial_stage", 0))
         for index, button in enumerate(self.stage_buttons):
-            button.setEnabled(index <= frontier)
+            button.setEnabled(index <= reachable)
             if index == self.session.current_index:
                 button.setStyleSheet(
                     "background:#eaf1fe;color:#2458b8;border:none;border-radius:8px;"
@@ -1397,7 +1405,9 @@ class DesignWindow(QMainWindow):
         if self.session is None:
             self.append_chat("assistant", "请先点击“开始管束设计”。")
             return
-        if index > 0 and not self.session.approved[index - 1]:
+        # 该型式的起始阶段允许先看（正式程序四颗 Tab 本来就随便点），
+        # 但要往后走仍得先保留前面的阶段
+        if index > 0 and not self.session.approved[index - 1] and index > self._initial_stage:
             self.append_chat("assistant", f"请先保留“{STAGES[index - 1]}”，再进入“{STAGES[index]}”。")
             return
         self._render_stage(index)
@@ -1412,7 +1422,7 @@ class DesignWindow(QMainWindow):
         self.session.invalidate_from(stage)
         self.append_chat(
             "assistant",
-            f"检测到“{stage}”已修改，后续 Tab 的草稿已自动作废，需要重新检查并保留。",
+            f"检测到“{stage}”已修改，后续阶段的草稿已自动作废，需要重新检查并保留。",
         )
         self._refresh_stage_buttons()
 
@@ -1442,14 +1452,7 @@ class DesignWindow(QMainWindow):
             self.append_chat("assistant", f"“{stage}”有 {len(issues)} 项没通过校验，尚未写库：\n{detail}")
             return
         if not self.headless:
-            answer = QMessageBox.question(
-                self,
-                "确认保留",
-                f"确认保留“{stage}”的当前内容吗？\n保留后进入下一个 Tab；四个 Tab 全部保留才会写数据库。",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if answer != QMessageBox.Yes:
+            if not self._confirm_keep(stage):
                 return
         payload = page.to_payload()
         self.session.mark_kept(stage, payload)
@@ -1459,6 +1462,21 @@ class DesignWindow(QMainWindow):
             self.final_save()
             return
         self._render_stage(self.session.current_index)
+
+    def _build_keep_box(self, stage: str):
+        """保留确认弹窗（按钮就是 是 / 否；文案不出现 Tab 这类界面术语）。"""
+        from bundle.widgets import ConfirmDialog
+
+        return ConfirmDialog(
+            "确认保留",
+            f"确认保留“{stage}”的当前内容吗？",
+            "保留后进入下一阶段。",
+            parent=self,
+        )
+
+    def _confirm_keep(self, stage: str) -> bool:
+        dialog = self._build_keep_box(stage)
+        return dialog.exec_() == QDialog.Accepted
 
     def _sync_downstream(self, stage: str) -> None:
         if stage == "管板型式":
@@ -1488,7 +1506,7 @@ class DesignWindow(QMainWindow):
             return
         plan = self.session.preview_statements()
         head = [
-            f"产品 {self.session.product_id}（{self.session.product_type}）四个 Tab 已全部保留。",
+            f"产品 {self.session.product_id}（{self.session.product_type}）四个阶段已全部保留。",
             "即将在单个事务中写入正式数据库：",
             "• 产品设计活动表_管板形式表",
             "• 产品设计活动表_布管参数表（65 项）",
@@ -1874,11 +1892,11 @@ class DesignWindow(QMainWindow):
             stage = str(action.get("stage", "")).strip()
             parameter = str(action.get("parameter", "")).strip()
             if stage not in STAGES or parameter not in CANONICAL_FIELDS.get(stage, set()):
-                rejected.append(f"{stage}｜{parameter}：不属于该 Tab 的参数")
+                rejected.append(f"{stage}｜{parameter}：不属于该阶段的参数")
                 continue
             page = self.pages.get(STAGES.index(stage))
             if page is None:
-                rejected.append(f"{stage}｜{parameter}：该 Tab 尚未生成草稿")
+                rejected.append(f"{stage}｜{parameter}：该阶段尚未生成草稿")
                 continue
             try:
                 if isinstance(page, TubeLayoutPage):

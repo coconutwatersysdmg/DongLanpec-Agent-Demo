@@ -602,11 +602,14 @@ def describe_region(item: PlacementItem) -> str:
             )
         return f"跨 2 根参照管，整段沿连线法向平移 do/2+板厚/2+0.5，板长=中心距（{label}）"
     if item.kind == "center_baffle":
-        return f"取分程隔板两侧相邻的 2 根参照管（{label}）"
+        return f"隔板槽两侧第一排各选 1 根参照管，板长=中心距−do−2×孔桥（{label}）"
     if item.kind == "block_tube":
-        return f"取 2 根参照管，挡管落在分程隔板轴线上（{label}）"
+        return f"隔板槽两侧各选 1 根参照管，挡管落在连线与隔板槽轴线的交点（{label}）"
     if item.kind == "bypass":
-        return f"每个参照管各生成 1 块，沿折流板切口方向到壳壁（{label}）"
+        return (
+            "每个参照管各生成 1 块，沿折流板切口方向到壳壁；"
+            f"勾“对称分布”时按 4 象限各生成 1 块（{label}）"
+        )
     if anchors == 2:
         return f"跨 2 根相邻参照管（{label}）"
     return label
@@ -639,3 +642,52 @@ def describe_item(item: PlacementItem, values: dict | None = None) -> dict:
         "options": shown,
         "occupying": item.occupying,
     }
+
+
+# --------------------------------------------------------------- 名义孔桥宽度
+# 逐值照抄正式程序 modules/buguan/buguan_ziyong/nominal_bridge_width.py
+NOMINAL_BRIDGE_WIDTH = {
+    10: 3.82, 12: 3.82, 14: 4.75, 16: 5.75, 19: 5.75, 20: 5.75,
+    25: 6.75, 30: 7.65, 32: 7.60, 35: 8.60, 38: 9.55,
+    45: 11.50, 50: 13.45, 55: 14.35, 57: 14.35,
+}
+
+
+def nominal_bridge_width(do) -> float:
+    """换热管外径 do → 名义孔桥宽度（正式程序 get_nominal_bridge_width）。"""
+    try:
+        return float(NOMINAL_BRIDGE_WIDTH.get(int(round(float(do))), 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def groove_pairs(centers, axis: str = "y"):
+    """隔板槽两侧第一排换热管的相邻管对（正式程序“隔板槽两侧各选一个参照管”）。
+
+    axis="y"：分程隔板水平（2 管程），槽在 y=0，同一列里紧贴槽上/下各一根；
+    axis="x"：分程隔板竖直（4/6 管程），槽在 x=0，同一行里紧贴槽左/右各一根。
+    返回 [(靠近正侧的点, 靠近负侧的点)]，按 |槽坐标| 从内到外排序。
+    """
+    points = [(float(x), float(y)) for x, y in centers or []]
+    if not points:
+        return []
+    # axis="y" 时按 x 分列，比较 y；axis="x" 时按 y 分行，比较 x
+    key_index = 0 if axis == "y" else 1
+    value_index = 1 if axis == "y" else 0
+    groups: dict[float, list[tuple[float, float]]] = {}
+    for point in points:
+        groups.setdefault(round(point[key_index], 4), []).append(point)
+
+    pairs = []
+    for _key, group in groups.items():
+        positive = [p for p in group if p[value_index] > 1e-6]
+        negative = [p for p in group if p[value_index] < -1e-6]
+        if not positive or not negative:
+            continue                       # 这一列/行不过槽（或被隔板槽分成两段）
+        if any(abs(p[value_index]) <= 1e-6 for p in group):
+            continue                       # 正好压在槽线上，不能当参照管
+        near_positive = min(positive, key=lambda p: abs(p[value_index]))
+        near_negative = min(negative, key=lambda p: abs(p[value_index]))
+        pairs.append((near_positive, near_negative))
+    pairs.sort(key=lambda pair: abs(pair[0][key_index]))
+    return pairs
