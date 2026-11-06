@@ -3,6 +3,10 @@
 界面沿用 Demo 原有简洁聊天风格：用户消息靠右、AI 回复靠左、Enter 发送、
 Shift+Enter 换行。左侧导航使用正式程序的四个 Tab 名称，点击后在聊天区域
 展开该 Tab 的预览（管板型式/布管/管-板连接/轴向设计），预览底部只有一个“保留”。
+
+除参数修改外，用户还可以让 AI 布置布管元件：AI 只给“元件 + 数量 + 选孔规则 +
+元件参数”，界面渲染成 `PlacementPlanCard` 供用户过目，确认后才由
+`TubeLayoutPage.apply_placement_plan()` 按真实布管结果算出落点并画到图上。
 """
 from __future__ import annotations
 
@@ -10,14 +14,18 @@ import json
 import re
 from copy import deepcopy
 
-from PyQt5.QtCore import QThread, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QThread, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QComboBox,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QMainWindow,
     QMessageBox,
@@ -25,6 +33,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -33,8 +42,16 @@ from PyQt5.QtWidgets import (
 )
 
 from ai_support.api_client import CANONICAL_FIELDS, FIELD_ALIASES, DeepSeekClient
-from bundle.page import TubeLayoutPage
+from bundle.page import COMPONENT_LABEL, TubeLayoutPage
+from bundle.placement import (
+    KIND_LABEL,
+    OPTION_FIELDS,
+    PlacementItem,
+    normalize_kind,
+    normalize_region,
+)
 from bundle.stages import AxialStage, SheetFormStage, TubeConnectionStage
+from bundle.widgets import RightAlignedComboBox
 from db.production import DatabaseUnavailable, ProductionRepository, SaveFailed
 from models import STAGES
 from session import DesignSession
@@ -102,7 +119,7 @@ class MessageInput(QPlainTextEdit):
 class ChatTranscript(QScrollArea):
     """Widget-backed transcript so message alignment is not dependent on rich-text CSS support."""
 
-    MAX_TEXT_WIDTH = 900
+    MAX_TEXT_WIDTH = 1000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -112,6 +129,7 @@ class ChatTranscript(QScrollArea):
         self.message_rows = []
         self._messages = []
         self._transient_label: QLabel | None = None
+        self._stick_bottom = True
         self._content = QWidget()
         self._content.setObjectName("chatContent")
         self._layout = QVBoxLayout(self._content)
@@ -119,6 +137,19 @@ class ChatTranscript(QScrollArea):
         self._layout.setSpacing(18)
         self._layout.addStretch()
         self.setWidget(self._content)
+        # 消息/卡片的高度是布局完成之后才定的，插完立刻滚不一定到底；
+        # 这里跟着滚动条范围变化走：只要用户本来就在底部，就一直贴着最新一条。
+        bar = self.verticalScrollBar()
+        bar.rangeChanged.connect(self._on_range_changed)
+        bar.valueChanged.connect(self._on_value_changed)
+
+    def _on_range_changed(self, _minimum: int, maximum: int) -> None:
+        if self._stick_bottom:
+            self.verticalScrollBar().setValue(maximum)
+
+    def _on_value_changed(self, value: int) -> None:
+        bar = self.verticalScrollBar()
+        self._stick_bottom = value >= bar.maximum() - 4
 
     def append_message(self, role: str, text: str, transient: bool = False) -> QLabel:
         role = "user" if role == "user" else "assistant"
@@ -176,6 +207,9 @@ class ChatTranscript(QScrollArea):
             content.setObjectName("chatMessageText")
             content.setWordWrap(True)
             content.setMaximumWidth(510)
+            # 让短句不折行：按文字实际宽度给最小宽度，超过 510 才换行
+            natural = content.fontMetrics().horizontalAdvance(str(text).split("\n")[0]) + 16
+            content.setMinimumWidth(min(510, max(60, natural)))
             content.setTextInteractionFlags(Qt.TextSelectableByMouse)
             bubble_layout.addWidget(content)
             body.addWidget(name, 0, Qt.AlignRight)
@@ -205,7 +239,19 @@ class ChatTranscript(QScrollArea):
         self._transient_label = None
         self._layout.insertWidget(self._layout.count() - 1, widget)
         self.message_rows.append(widget)
-        QTimer.singleShot(0, self._scroll_to_bottom)
+        QTimer.singleShot(0, lambda w=widget: self._reveal(w))
+
+    def _reveal(self, widget: QWidget, retry: bool = True) -> None:
+        """新卡片：比视口高就从卡片顶部开始看，否则照常滚到最新一条。"""
+        if widget.height() > self.viewport().height() - 16:
+            self._stick_bottom = False
+            top = widget.mapTo(self._content, QPoint(0, 0)).y()
+            self.verticalScrollBar().setValue(max(0, top - 4))
+        else:
+            self._scroll_to_bottom()
+        # 插入时控件还没完成布局（高度可能是 0），下一轮事件循环再按真实高度决定一次
+        if retry:
+            QTimer.singleShot(0, lambda w=widget: self._reveal(w, retry=False))
 
     def remove_widget(self, widget: QWidget | None) -> None:
         if widget is None:
@@ -217,6 +263,7 @@ class ChatTranscript(QScrollArea):
         widget.deleteLater()
 
     def _scroll_to_bottom(self) -> None:
+        self._stick_bottom = True
         bar = self.verticalScrollBar()
         bar.setValue(bar.maximum())
 
@@ -231,6 +278,8 @@ class ChatTranscript(QScrollArea):
             row.deleteLater()
         self.message_rows.clear()
         self._messages.clear()
+        self._transient_label = None
+        self._stick_bottom = True
 
     def toPlainText(self) -> str:
         labels = {"user": "你", "assistant": "管束助手"}
@@ -260,10 +309,538 @@ class PreviewCard(QFrame):
         self.page = page
         layout.addWidget(page, 1)
 
-    def fit_to(self, available: int) -> None:
-        """卡片高度按页面实际需要定高，最多不超过聊天区可视高度。"""
-        need = self.page.sizeHint().height() + 56
-        self.setFixedHeight(max(min(need, available), 300))
+
+class PlanTubeRef(QWidget):
+    """方案卡里的一个参照管：行号/列号可改，坐标跟着实时更新。
+
+    正式程序里布置防冲板/中间挡板/中间挡管，输入就是“选哪两根换热管”；
+    这里把“第几行第几列”做成可编辑项，改完立刻换算成绝对坐标显示，
+    填了不存在的管孔会标红并禁止确认。
+    """
+
+    edited = pyqtSignal()
+
+    def __init__(self, ref: dict, tag: str = "", parent=None):
+        super().__init__(parent)
+        self._ref = dict(ref or {})
+        box = QVBoxLayout(self)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(2)
+        line = QHBoxLayout()
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(6)
+        self.tag_label = QLabel(tag)
+        self.tag_label.setObjectName("planRefTag")
+        self.tag_label.setFixedWidth(62)
+        line.addWidget(self.tag_label)
+        line.addWidget(self._hint("行"))
+        self.row_edit = self._number_edit(self._ref.get("row", 1))
+        line.addWidget(self.row_edit)
+        line.addWidget(self._hint("列"))
+        self.col_edit = self._number_edit(self._ref.get("col", 1))
+        line.addWidget(self.col_edit)
+        arrow = QLabel("→")
+        arrow.setObjectName("planCellMuted")
+        line.addWidget(arrow)
+        self.coord_label = QLabel(self._coord_text())
+        self.coord_label.setObjectName("planCoord")
+        line.addWidget(self.coord_label, 1)
+        box.addLayout(line)
+        self.error_label = QLabel("")
+        self.error_label.setObjectName("planError")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        box.addWidget(self.error_label)
+        for edit in (self.row_edit, self.col_edit):
+            edit.textEdited.connect(lambda *_: self.edited.emit())
+
+    @staticmethod
+    def _hint(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("planCellMuted")
+        return label
+
+    @staticmethod
+    def _number_edit(value) -> QLineEdit:
+        edit = QLineEdit(str(value))
+        edit.setObjectName("planCellEdit")
+        edit.setAlignment(Qt.AlignCenter)
+        edit.setFixedWidth(46)
+        return edit
+
+    def _coord_text(self) -> str:
+        return f"({float(self._ref.get('x', 0)):.1f}, {float(self._ref.get('y', 0)):.1f})"
+
+    def tag(self) -> str:
+        return self.tag_label.text()
+
+    def value(self) -> tuple[int, int] | None:
+        try:
+            return int(self.row_edit.text().strip()), int(self.col_edit.text().strip())
+        except (TypeError, ValueError):
+            return None
+
+    def set_ref(self, ref: dict) -> None:
+        """用程序解析出的真实管孔回填坐标（行/列保留用户输入）。"""
+        if not ref:
+            return
+        self._ref = dict(ref)
+        self.coord_label.setText(self._coord_text())
+
+    def set_error(self, message: str = "") -> None:
+        if message:
+            style = "QLineEdit{background:#fff5f5;border:1px solid #d04b4b;border-radius:5px;padding:2px 4px;}"
+            self.coord_label.setText("—")
+        else:
+            style = ""
+            self.coord_label.setText(self._coord_text())
+        for edit in (self.row_edit, self.col_edit):
+            edit.setStyleSheet(style)
+        self.error_label.setText(message)
+        self.error_label.setVisible(bool(message))
+
+    def set_message(self, message: str) -> None:
+        """只提示、不标红（例如两根管不在同一排）。"""
+        self.error_label.setText(message)
+        self.error_label.setVisible(bool(message))
+
+    def set_editable(self, editable: bool) -> None:
+        for edit in (self.row_edit, self.col_edit):
+            edit.setReadOnly(not editable)
+            edit.setEnabled(editable)
+
+
+class PlanParamField(QWidget):
+    """方案卡里的一个元件参数（数值输入或下拉选择），可编辑。"""
+
+    edited = pyqtSignal()
+
+    def __init__(self, spec: dict, parent=None):
+        super().__init__(parent)
+        self.name = str(spec.get("name", ""))
+        self._kind = str(spec.get("kind", "number"))
+        self._locked = bool(spec.get("locked"))
+        # 形式（防冲板形式/滑道形式…）：改了要连方案内容一起换
+        self.is_form = bool(spec.get("form"))
+        value = str(spec.get("value", "") or "")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(5)
+        label = QLabel(str(spec.get("short") or self.name))
+        label.setObjectName("planCellMuted")
+        label.setToolTip(self.name)
+        row.addWidget(label)
+        if self._locked:
+            self.editor: QWidget = QLabel(value or "—")
+            self.editor.setObjectName("planLockedValue")
+            row.addWidget(self.editor)
+        elif self._kind == "choice" and spec.get("options"):
+            combo = RightAlignedComboBox()
+            combo.setObjectName("planCellCombo")
+            combo.setMinimumWidth(112)
+            for option in spec.get("options") or []:
+                combo.addItem(str(option), str(option))
+            index = combo.findData(value)
+            if index < 0 and value:
+                combo.addItem(value, value)
+                index = combo.count() - 1
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            combo.currentIndexChanged.connect(lambda *_: self.edited.emit())
+            self.editor = combo
+            row.addWidget(combo)
+        else:
+            edit = QLineEdit(value)
+            edit.setObjectName("planCellEdit")
+            edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            edit.setFixedWidth(66)
+            edit.textEdited.connect(lambda *_: self.edited.emit())
+            self.editor = edit
+            row.addWidget(edit)
+        unit = str(spec.get("unit", "") or "")
+        unit_label = QLabel(unit)
+        unit_label.setObjectName("planCellMuted")
+        unit_label.setMinimumWidth(16)
+        row.addWidget(unit_label)
+        row.addStretch()
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.setToolTip(self.name)
+
+    @property
+    def is_locked(self) -> bool:
+        return self._locked
+
+    def value(self) -> str | None:
+        """返回参数文本；数值型为空或填了非数字返回 None（卡片会标红）。"""
+        if self._locked:
+            return None
+        if isinstance(self.editor, QComboBox):
+            return str(self.editor.currentData() or self.editor.currentText()).strip()
+        text = self.editor.text().strip()
+        try:
+            float(text)
+        except ValueError:
+            return None
+        return text
+
+    def set_error(self, on: bool) -> None:
+        if not isinstance(self.editor, QLineEdit):
+            return
+        self.editor.setStyleSheet(
+            "QLineEdit{background:#fff5f5;border:1px solid #d04b4b;border-radius:5px;padding:2px 4px;}"
+            if on else ""
+        )
+
+    def set_editable(self, editable: bool) -> None:
+        self.editor.setEnabled(editable and not self._locked)
+
+
+class PlacementPlanCard(QFrame):
+    """AI 元件布置方案：先给用户过目/改参数，确认后才在布管图上落地。
+
+    卡片本身就是正式程序里那个“选管 + 参数”弹窗的可编辑版：选中的换热管按
+    “第几行第几列”给出来可以改，元件参数也直接改，改完图上高亮同步。
+    """
+
+    confirm_requested = pyqtSignal(object)
+    discard_requested = pyqtSignal(object)
+
+    def __init__(self, items, preview: dict, page=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("planCard")
+        self.items = list(items)
+        self._page = page
+        self._preview = preview or {}
+        self._blocks: list[dict] = []
+        self._syncing = False
+        self.setMaximumWidth(ChatTranscript.MAX_TEXT_WIDTH + 34)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(7)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel("布管 · 元件布置方案")
+        title.setObjectName("planTitle")
+        head.addWidget(title)
+        self.badge = QLabel("待确认")
+        self.badge.setObjectName("statusBadge")
+        head.addWidget(self.badge)
+        head.addStretch()
+        root.addLayout(head)
+
+        self.body = QFrame()
+        self.body.setObjectName("planTable")
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(12, 8, 12, 8)
+        self.body_layout.setSpacing(7)
+        root.addWidget(self.body)
+
+        # 提示与按钮同一行：卡片矮一点，聊天区里能整张看完（按钮不会被挤到屏幕外）
+        self.actions = QHBoxLayout()
+        self.actions.setSpacing(8)
+        self.hint = QLabel("")
+        self.hint.setObjectName("planHint")
+        self.hint.setWordWrap(True)
+        self.actions.addWidget(self.hint, 1)
+        self.discard_button = QPushButton("放弃")
+        self.discard_button.setObjectName("planGhost")
+        self.discard_button.setCursor(Qt.PointingHandCursor)
+        self.confirm_button = QPushButton("确认布置")
+        self.confirm_button.setObjectName("planPrimary")
+        self.confirm_button.setCursor(Qt.PointingHandCursor)
+        self.discard_button.clicked.connect(lambda: self.discard_requested.emit(self))
+        self.confirm_button.clicked.connect(lambda: self.confirm_requested.emit(self))
+        self.actions.addWidget(self.discard_button)
+        self.actions.addWidget(self.confirm_button)
+        root.addLayout(self.actions)
+
+        self._build_body()
+        self._sync()
+
+    # ---------------------------------------------------------------- 卡片内容
+    def _build_body(self) -> None:
+        while self.body_layout.count():
+            item = self.body_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._blocks = []
+        rows = self._preview.get("rows", [])
+        for row, item in zip(rows, self.items):
+            block = QFrame()
+            block.setObjectName("planBlock")
+            box = QVBoxLayout(block)
+            box.setContentsMargins(10, 6, 10, 6)
+            box.setSpacing(4)
+
+            title_line = QHBoxLayout()
+            title_line.setSpacing(8)
+            name = QLabel(str(row.get("label", "")))
+            name.setObjectName("planCellStrong")
+            title_line.addWidget(name)
+            count = QLabel(f"× {row.get('count', 1)}")
+            count.setObjectName("planCellMuted")
+            title_line.addWidget(count)
+            delete_note = QLabel("")
+            delete_note.setObjectName("planDeleteNote")
+            title_line.addWidget(delete_note)
+            title_line.addStretch()
+            box.addLayout(title_line)
+
+            entry = {
+                "item": item,
+                "label": str(row.get("label", "")),
+                "mode": str(row.get("ref_mode", "none")),
+                "refs": [],
+                "params": [],
+                "seed_edited": False,
+                "delete_note": delete_note,
+            }
+
+            mode = entry["mode"]
+            if mode in {"pair", "seed"}:
+                refs = row.get("refs") or []
+                pair_total = max(len(refs) // 2, 1)
+                grid = QGridLayout()
+                grid.setContentsMargins(0, 0, 0, 0)
+                grid.setHorizontalSpacing(18)
+                grid.setVerticalSpacing(4)
+                per_line = 2 if mode == "pair" else 1
+                for index, ref in enumerate(refs):
+                    if mode == "seed":
+                        tag = "种子管"
+                    elif pair_total == 1:
+                        tag = f"参照管 {index + 1}"
+                    else:
+                        tag = f"{index // 2 + 1}-{index % 2 + 1}"
+                    editor = PlanTubeRef(ref, tag)
+                    editor.edited.connect(
+                        lambda e=editor, ent=entry: self._on_ref_edited(ent, e)
+                    )
+                    entry["refs"].append(editor)
+                    grid.addWidget(editor, index // per_line, index % per_line)
+                box.addLayout(grid)
+                if mode == "seed":
+                    expanded = len(row.get("tubes") or [])
+                    note = QLabel(f"按对称展开后共 {expanded} 根")
+                    note.setObjectName("planCellMuted")
+                    box.addWidget(note)
+            elif mode == "text" and row.get("anchors"):
+                detail = QLabel(str(row.get("anchors")))
+                detail.setObjectName("planCellMuted")
+                detail.setWordWrap(True)
+                box.addWidget(detail)
+            else:
+                detail = QLabel("不选管：按下面的参数定位")
+                detail.setObjectName("planCellMuted")
+                box.addWidget(detail)
+
+            param_specs = row.get("param_rows") or []
+            if param_specs:
+                fields: list[PlanParamField] = []
+                for spec in param_specs:
+                    field = PlanParamField(spec)
+                    field.edited.connect(
+                        lambda f=field, ent=entry: self._on_param_edited(ent, f)
+                    )
+                    entry["params"].append(field)
+                    fields.append(field)
+                for start in range(0, len(fields), 3):
+                    line = QHBoxLayout()
+                    line.setContentsMargins(0, 0, 0, 0)
+                    line.setSpacing(20)
+                    for field in fields[start:start + 3]:
+                        line.addWidget(field)
+                    line.addStretch()
+                    box.addLayout(line)
+
+            self._blocks.append(entry)
+            self.body_layout.addWidget(block)
+
+    def _on_ref_edited(self, entry: dict, editor: PlanTubeRef) -> None:
+        if entry["mode"] == "seed":
+            entry["seed_edited"] = True
+        self._sync()
+
+    def _on_param_edited(self, entry: dict, field: PlanParamField) -> None:
+        """参数改动：普通数值照旧实时预览；改“形式”则整块方案内容跟着换。"""
+        if not field.is_form:
+            self._sync()
+            return
+        item = entry["item"]
+        value = field.value()
+        if value:
+            item.overrides[field.name] = value
+            # 形式本身也是“方案的选择”，一并记进方案，落位时写回参数表
+            item.options[field.name] = value
+        # 形式一换：参数列表、要不要参照管、删几个干涉管全都不一样了，整块重建
+        QTimer.singleShot(0, self._rebuild_after_form_change)
+
+    def _rebuild_after_form_change(self) -> None:
+        if self._page is None:
+            return
+        self._preview = self._page.preview_placement(self.items)
+        self._build_body()
+        self._sync()
+
+    # ---------------------------------------------------------------- 同步校验
+    def _sync(self) -> None:
+        """把卡片上的编辑结果写回方案，再让程序重算落点并在图上重新高亮。"""
+        if self._syncing or self._page is None:
+            return
+        self._syncing = True
+        try:
+            problems: list[str] = []
+            pos_rows, neg_rows = self._page.row_limits()
+            for entry in self._blocks:
+                item = entry["item"]
+                anchors: list = []
+                ref_ok = True
+                for editor in entry["refs"]:
+                    value = editor.value()
+                    center = None
+                    if value is not None:
+                        center = self._page.center_for_row_col(*value)
+                    if center is None:
+                        hint = (
+                            f"没有这个管孔（行 {value[0]}、列 {value[1]}）"
+                            if value is not None else "行号和列号都要填整数"
+                        )
+                        editor.set_error(
+                            f"{hint}；行 1~{max(pos_rows, 1)} 或 {-max(neg_rows, 1)}~-1"
+                        )
+                        problems.append(f"{entry['label']}：参照管要重新填")
+                        ref_ok = False
+                        continue
+                    editor.set_error("")
+                    anchors.append(center)
+
+                if entry["mode"] == "pair":
+                    item.anchors = anchors
+                elif entry["mode"] == "seed" and entry["seed_edited"] and anchors:
+                    item.anchors = anchors[:1]
+
+                overrides: dict = {}
+                for field in entry["params"]:
+                    if field.is_locked:
+                        continue
+                    text = field.value()
+                    if text is None:
+                        field.set_error(True)
+                        problems.append(f"{entry['label']}：{field.name} 要填数字")
+                        continue
+                    field.set_error(False)
+                    if text != "":
+                        overrides[field.name] = text
+                item.overrides = overrides
+
+                error = self._page.validate_anchors(item) if ref_ok else None
+                if error:
+                    problems.append(f"{entry['label']}：{error}")
+                    if entry["refs"]:
+                        entry["refs"][-1].set_message(error)
+
+            self._preview = self._page.preview_placement(self.items)
+            if not problems:
+                self._refresh_ref_coords()
+            self._refresh_hint(problems)
+        finally:
+            self._syncing = False
+
+    def _refresh_ref_coords(self) -> None:
+        rows = self._preview.get("rows", [])
+        for entry, row in zip(self._blocks, rows):
+            refs = row.get("refs") or []
+            for editor, ref in zip(entry["refs"], refs):
+                editor.set_ref(ref)
+            note = entry.get("delete_note")
+            if note is not None:
+                deleted = int(row.get("deleted") or 0)
+                note.setText(f"落位后删 {deleted} 个干涉管" if deleted else "")
+
+    def _refresh_hint(self, problems: list[str]) -> None:
+        holes = self._preview.get("holes", 0)
+        occupying = self._preview.get("occupying", 0)
+        deletes = self._preview.get("deletes", 0)
+        remaining = self._preview.get("remaining", holes)
+        text = f"确认后按卡片参数布置（{holes} 孔）"
+        parts = []
+        if occupying:
+            parts.append(f"占用 {occupying}")
+        if deletes:
+            parts.append(f"删干涉管 {deletes}")
+        if parts:
+            parts.append(f"剩 {remaining}")
+            text += "：" + "、".join(parts)
+        self.hint.setText(text + "。")
+        if problems:
+            self.hint.setText(text + "。请先改好：" + "；".join(dict.fromkeys(problems)))
+        self.confirm_button.setEnabled(not problems)
+        self.badge.setText("有待修正" if problems else "待确认")
+
+    def _set_editable(self, editable: bool) -> None:
+        for entry in self._blocks:
+            for editor in entry["refs"]:
+                editor.set_editable(editable)
+            for field in entry["params"]:
+                field.set_editable(editable)
+
+    def _restyle_badge(self) -> None:
+        style = self.badge.style()
+        style.unpolish(self.badge)
+        style.polish(self.badge)
+        self.badge.update()
+
+        style = self.badge.style()
+        style.unpolish(self.badge)
+        style.polish(self.badge)
+        self.badge.update()
+
+    def mark_applied(self, result: dict) -> None:
+        ok = bool(result.get("ok"))
+        self.badge.setText("已布置" if ok else "未能布置")
+        self.badge.setObjectName("keptBadge" if ok else "planFailedBadge")
+        self._restyle_badge()
+        self._set_editable(False)
+        for button in (self.confirm_button, self.discard_button):
+            button.setEnabled(False)
+            button.hide()
+
+        lines = []
+        for row in result.get("rows", []):
+            text = f"{row['label']} × {row['placed']}"
+            if row.get("skipped"):
+                text += f"（{row['skipped']} 个未布置：{row.get('detail') or '位置不足'}）"
+            elif row.get("detail"):
+                text += f"（{row['detail']}）"
+            lines.append(text)
+        if result.get("occupied"):
+            text = (
+                f"已布置：{'；'.join(lines)}。占用 {result['occupied']} 个管孔，"
+                f"剩 {result.get('holes_after', 0)} 个。"
+            )
+        else:
+            text = f"已布置：{'；'.join(lines) or result.get('message', '')}"
+        done = QLabel(text)
+        done.setObjectName("planResult")
+        done.setWordWrap(True)
+        self.layout().insertWidget(self.layout().count() - 1, done)
+
+    def mark_discarded(self) -> None:
+        self.badge.setText("已放弃")
+        self.badge.setObjectName("planMutedBadge")
+        self._restyle_badge()
+        self._set_editable(False)
+        for button in (self.confirm_button, self.discard_button):
+            button.setEnabled(False)
+            button.hide()
+        done = QLabel("方案已放弃，布管图没有改动。")
+        done.setObjectName("planResultMuted")
+        done.setWordWrap(True)
+        self.layout().insertWidget(self.layout().count() - 1, done)
 
 
 class DesignWindow(QMainWindow):
@@ -279,13 +856,25 @@ class DesignWindow(QMainWindow):
         self._worker_callback = None
         self._worker_cancelled = False
         self.chat_history: list[dict] = []
+        self.placement_cards: list[PlacementPlanCard] = []
+        self._last_user_text = ""
         self.db_status = "未连接"
         # 离屏截图/自动验收用：跳过模态弹窗，并且绝不真正写库
         self.headless = False
         self.setWindowTitle("管束设计 Agent")
         self.setFont(QFont("Microsoft YaHei UI", 10))
-        self.resize(1720, 1020)
-        self.setMinimumSize(1280, 820)
+        # 窗口铺满可用桌面：对话是主界面，越大越好（启动时还会 showMaximized）
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        width, height = 1600, 980
+        if available is not None:
+            width = int(available.width() * 0.94)
+            height = int(available.height() * 0.94)
+        self.resize(max(width, 1200), max(height, 760))
+        self.setMinimumSize(1180, 740)
+        # 预览区保底：够放布管页的表格+画布；小屏幕上按比例让位给对话
+        avail_h = available.height() if available is not None else 1040
+        self._preview_floor = max(320, min(430, int(avail_h * 0.50)))
         self._build_ui()
         self._apply_style()
         self._check_database()
@@ -296,6 +885,14 @@ class DesignWindow(QMainWindow):
             "“管板型式 → 布管 → 管-板连接 → 轴向设计”四个 Tab 生成草稿。\n"
             "布管图形和右侧管孔数量表都可以直接操作；四个 Tab 都保留后才写库。",
         )
+
+    def _apply_default_split(self) -> None:
+        """预览给够用就行，剩下的全给对话（对话是主界面）。"""
+        total = max(self.splitter.height(), 760)
+        floor = min(self._preview_floor, int(total * 0.55))
+        preview = max(int(total * 0.46), floor)
+        preview = min(preview, max(total - 280, 300))
+        self.splitter.setSizes([preview, total - preview])
 
     # ------------------------------------------------------------------ 布局
     def _build_ui(self):
@@ -370,7 +967,7 @@ class DesignWindow(QMainWindow):
         self.main_panel = QFrame()
         self.main_panel.setObjectName("mainPanel")
         main_layout = QVBoxLayout(self.main_panel)
-        main_layout.setContentsMargins(40, 18, 40, 14)
+        main_layout.setContentsMargins(28, 16, 28, 12)
         main_layout.setSpacing(0)
 
         header = QHBoxLayout()
@@ -386,11 +983,31 @@ class DesignWindow(QMainWindow):
         header.addWidget(self.clear_chat_button)
         main_layout.addLayout(header)
 
+        # 图形化界面固定在界面上方，只有下方对话区滚动
+        self.preview_host = QFrame()
+        self.preview_host.setObjectName("previewHost")
+        self.preview_layout = QVBoxLayout(self.preview_host)
+        self.preview_layout.setContentsMargins(0, 0, 0, 0)
+        self.preview_layout.setSpacing(0)
+        # 还没开始设计时整块预览区不占位，开始后才出现
+        self.preview_host.hide()
+
         self.conversation = ChatTranscript()
         self.conversation.setObjectName("conversation")
         self.conversation.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.conversation.setMinimumHeight(240)
-        main_layout.addWidget(self.conversation, 1)
+        self.conversation.setMinimumHeight(260)
+
+        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter.setObjectName("mainSplitter")
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.preview_host)
+        self.splitter.addWidget(self.conversation)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 1)
+        # 预览区保底高度：低于这个值布管页的表格/画布会挤在一起
+        self.preview_host.setMinimumHeight(self._preview_floor)
+        self._apply_default_split()
+        main_layout.addWidget(self.splitter, 1)
 
         composer_wrap = QWidget()
         wrap_layout = QVBoxLayout(composer_wrap)
@@ -414,7 +1031,7 @@ class DesignWindow(QMainWindow):
         self.send_button.clicked.connect(self.send_note)
         composer_layout.addWidget(self.send_button, 0, Qt.AlignBottom)
         wrap_layout.addWidget(composer)
-        hint = QLabel("Enter 发送 · Shift+Enter 换行 · Ctrl+滚轮缩放布管图 · 拖动空白处框选")
+        hint = QLabel("Enter 发送 · Shift+Enter 换行 · 点换热管/普通拉杆可多选（再点取消）· 右键清空选中 · Ctrl+滚轮缩放")
         hint.setObjectName("shortcutHint")
         hint.setAlignment(Qt.AlignCenter)
         wrap_layout.addWidget(hint)
@@ -457,12 +1074,44 @@ class DesignWindow(QMainWindow):
         #assistantName { color:#4a76cf; font-size:9pt; font-weight:600; }
         #userName { color:#a9b2c0; font-size:9pt; padding:0 6px 0 0; }
         #chatMessageText { color:#22262c; font-size:10.5pt; }
-        #userBubble { background:#f4f8ff; border:1px solid #dbe6fb; border-radius:14px; }
+        #userBubble { background:#eaf1fe; border:none; border-radius:14px; }
+        #userBubble QLabel { background:transparent; border:none; }
         #composer { background:#ffffff; border:1px solid #e2e3e6; border-radius:16px; }
         #composer:hover { border-color:#cfd6e2; }
         #composerInput { background:transparent; border:none; color:#1f2329; font-size:10.5pt; padding:5px 2px; }
         #shortcutHint { color:#a8acb3; font-size:8.5pt; }
         #previewCard { background:#ffffff; border:1px solid #e6e5e2; border-radius:16px; }
+        #previewHost { background:#ffffff; border:1px solid #e8e8e5; border-radius:16px; }
+        #previewHint { color:#9aa1ab; font-size:8.5pt; padding:0 6px 4px 6px; }
+        #mainSplitter::handle { background:#f0efec; height:8px; }
+        #mainSplitter::handle:hover { background:#e2e1dd; }
+        #planCard { background:#ffffff; border:1px solid #e6e5e2; border-radius:16px; }
+        #planTitle { font-size:11.5pt; font-weight:600; color:#1b1e23; }
+        #planTable { background:#fafbfc; border:1px solid #eef0f3; border-radius:10px; }
+        #planHead { color:#9aa1ab; font-size:9pt; }
+        #planCell { color:#2b2f36; font-size:10pt; }
+        #planCellStrong { color:#1b1e23; font-size:10pt; font-weight:600; }
+        #planCellMuted { color:#6b7280; font-size:9.5pt; }
+        #planBlock { background:#ffffff; border:1px solid #eef0f3; border-radius:9px; }
+        #planRefTag { color:#5b6068; font-size:9.5pt; }
+        #planCoord { color:#2458b8; font-size:9.5pt; }
+        #planError { color:#b04a42; font-size:8.5pt; }
+        #planCellEdit { background:#ffffff; border:1px solid #e2e3e6; border-radius:5px; padding:2px 4px; font-size:9.5pt; }
+        #planCellEdit:focus { border-color:#2f6fe4; }
+        #planCellCombo { background:#ffffff; border:1px solid #e2e3e6; border-radius:5px; padding:1px 16px 1px 4px; font-size:9.5pt; }
+        #planCellCombo:hover { border-color:#c9d8ea; }
+        #planLockedValue { color:#4a4f57; font-size:9.5pt; font-weight:600; }
+        #planHint { color:#8f949c; font-size:9pt; }
+        #planDeleteNote { color:#b45309; font-size:8.5pt; }
+        #planResult { color:#256b3a; font-size:10pt; }
+        #planResultMuted { color:#8f949c; font-size:9.5pt; }
+        #planPrimary { background:#2f6fe4; color:#ffffff; border:none; border-radius:9px; padding:8px 18px; font-weight:600; }
+        #planPrimary:hover { background:#2a63cc; }
+        #planPrimary:disabled { background:#e8eefb; color:#a9b8d4; }
+        #planGhost { background:#ffffff; border:1px solid #e2e3e6; border-radius:9px; padding:8px 16px; color:#5f646c; }
+        #planGhost:hover { background:#f5f7fa; }
+        #planMutedBadge { background:#f2f3f5; color:#8f949c; border:1px solid #e6e7ea; border-radius:10px; padding:3px 9px; font-size:9pt; }
+        #planFailedBadge { background:#fdf1f0; color:#a1443c; border:1px solid #e9c3bf; border-radius:10px; padding:3px 9px; font-size:9pt; }
         #statusBadge { background:#fff4d6; color:#805b10; border:1px solid #e1c36d; border-radius:10px; padding:3px 9px; font-size:9pt; }
         #keptBadge { background:#eaf7ee; color:#256b3a; border:1px solid #b7dfc4; border-radius:10px; padding:3px 9px; font-size:9pt; }
         QPushButton { background:#ffffff; border:1px solid #e2e3e6; border-radius:9px; padding:8px 14px; font-size:10pt; color:#2b2f36; }
@@ -688,19 +1337,29 @@ class DesignWindow(QMainWindow):
             page.setParent(None)
         return page
 
+    def _clear_preview(self) -> None:
+        """把当前预览卡片卸下，同时保住页面对象，避免随卡片一起被销毁。"""
+        if self.card is None:
+            return
+        page = self.card.page
+        self.card.layout().removeWidget(page)
+        page.setParent(None)
+        self.preview_layout.removeWidget(self.card)
+        self.card.setParent(None)
+        self.card.deleteLater()
+        self.card = None
+
     def _render_stage(self, index: int) -> None:
         if self.session is None:
             return
-        self.conversation.remove_widget(self.card)
-        self.card = None
         page = self._ensure_page(index)
+        self._clear_preview()
         stage = STAGES[index]
         self.card = PreviewCard(stage, page, approved=self.session.approved[index])
-        # 预览卡片高度锁定为聊天区可视高度：卡片一出现就占满，避免“保留”被挤出屏幕
-        self.card.fit_to(max(self.conversation.viewport().height() - 12, 340))
-        self.conversation.append_widget(self.card)
-        self.conversation.scroll_to(self.card)
-        QTimer.singleShot(80, self.conversation._scroll_to_bottom)
+        self.preview_layout.addWidget(self.card, 1)
+        if self.preview_host.isHidden():
+            self.preview_host.show()
+            self._apply_default_split()
         self.session.current_index = index
         self._refresh_stage_buttons()
 
@@ -884,6 +1543,7 @@ class DesignWindow(QMainWindow):
             self.append_chat("assistant", "上一条要求还在处理中，请稍候。")
             return
         self.append_chat("user", text)
+        self._last_user_text = text
         if self.session is None:
             self.append_chat("assistant", "请先点击左侧“开始管束设计”，读取数据库并生成草稿后才能修改。")
             return
@@ -898,10 +1558,11 @@ class DesignWindow(QMainWindow):
                 if not item.get("transient")
             ]
             context = self._ai_context()
+            layout_state = self._layout_state()
             stage = self.session.current_stage
             self.send_button.setEnabled(False)
             self._start_worker(
-                lambda: client.chat(history, context, stage, text),
+                lambda: client.chat(history, context, stage, text, layout_state),
                 self._handle_ai_result,
             )
             return
@@ -911,6 +1572,31 @@ class DesignWindow(QMainWindow):
             "“外围对称布置8根拉杆”“保留当前方案”“把刚才的修改撤销”）。"
             "如需自由问答，请在 AI 设置中填写 DeepSeek API Key。",
         )
+
+    def _layout_state(self) -> dict:
+        """给模型看的布管现状：管孔数、已布置元件统计——只读快照，不含坐标。"""
+        page = self.pages.get(1)
+        if not isinstance(page, TubeLayoutPage):
+            return {}
+        counts: dict[str, int] = {}
+        for component in page.components:
+            label = COMPONENT_LABEL.get(component.get("kind"), "元件")
+            counts[label] = counts.get(label, 0) + 1
+        names: set[str] = set()
+        for kind in KIND_LABEL:
+            names.update(OPTION_FIELDS.get(kind, ()))
+        values = {}
+        for name in names:
+            text = page.parameters.get(name, {}).get("value")
+            if str(text or "").strip():
+                values[name] = str(text).strip()
+        return {
+            "hole_count": len(page.current_centers()),
+            "selected_holes": len(page.selected),
+            "placed_components": counts,
+            "product_type": page.product_type,
+            "current_values": values,
+        }
 
     def _ai_context(self) -> dict:
         context: dict[str, dict] = {}
@@ -958,6 +1644,22 @@ class DesignWindow(QMainWindow):
             self.keep_current(self.session.current_stage)
             return True
 
+        if compact in {"确认布置", "确认方案", "执行方案", "按这个布置", "就按这个布置"}:
+            pending = [card for card in self.placement_cards if card.badge.text() == "待确认"]
+            if pending:
+                self._confirm_placement(pending[-1])
+            else:
+                self.append_chat("assistant", "当前没有待确认的布置方案。")
+            return True
+
+        if compact in {"放弃方案", "取消方案", "不布置了"}:
+            pending = [card for card in self.placement_cards if card.badge.text() == "待确认"]
+            if pending:
+                self._discard_placement(pending[-1])
+            else:
+                self.append_chat("assistant", "当前没有待确认的布置方案。")
+            return True
+
         if "使用推荐值" in compact or "采用推荐" in compact:
             if isinstance(page, TubeLayoutPage) and page.issues:
                 issue = next((i for i in page.issues if i.get("recommended") is not None), None)
@@ -986,24 +1688,15 @@ class DesignWindow(QMainWindow):
                     self.append_chat("assistant", outcome.get("message", "布管未成功。"))
                 return True
 
-            match = re.search(r"(?:外围|对称)?(?:布置|增加|加)?(\d+)根拉杆", compact)
-            if match:
-                count = int(match.group(1))
-                added = layout_page.place_edge_rods(count)
-                self.append_chat("assistant", f"已在外围对称布置 {added} 根拉杆，管孔数量已同步刷新。")
+            item = self._parse_placement_words(compact)
+            if item is not None:
+                self.append_chat(
+                    "assistant",
+                    f"我按“{item.label} × {item.count}”生成了一版布置方案，请先过目；"
+                    "确认后我直接在布管图上布置。",
+                )
+                self._show_placement_card([item])
                 return True
-
-            match = re.search(r"(\d+)块旁路挡板", compact)
-            if match:
-                added = layout_page.place_bypasses(int(match.group(1)))
-                self.append_chat("assistant", f"已沿壳体内壁布置 {added} 块旁路挡板。")
-                return True
-
-            if "防冲板" in compact and any(word in compact for word in ("上方", "顶部", "布置", "增加")):
-                added = layout_page.place_impingement_top(1)
-                self.append_chat("assistant", f"已在上方布置 {added} 块防冲板。")
-                return True
-
         if "为什么" in compact and "不通过" in compact:
             issues = page.validation_issues() if hasattr(page, "validation_issues") else []
             if issues:
@@ -1018,6 +1711,87 @@ class DesignWindow(QMainWindow):
             return True
 
         return self._handle_parameter_sentence(text)
+
+    # 离线也能布置元件：把“4 根螺纹拉杆、直径 16，均布在靠近壳壁的管孔上”解析成方案
+    _PLACEMENT_WORDS = (
+        ("自由拉杆", "free_rod"),
+        ("中间挡管", "block_tube"),
+        ("旁路挡板", "bypass"),
+        ("中间挡板", "center_baffle"),
+        ("滑道", "slide"),
+        ("防冲板", "impingement"),
+        ("吊环螺钉", "screw_ring"),
+        ("折流板", "baffle"),
+        ("拉杆", "rod"),
+    )
+    _PLACEMENT_VERBS = ("布置", "摆放", "摆", "放", "增加", "加", "均布", "设置", "安装", "来")
+
+    def _parse_placement_words(self, compact: str) -> PlacementItem | None:
+        # 纯咨询（“拉杆一般怎么布置？”）不生成方案，避免把提问当成指令
+        if any(word in compact for word in ("怎么", "如何", "为什么", "吗", "？", "?")):
+            return None
+        for word, kind in self._PLACEMENT_WORDS:
+            if word not in compact:
+                continue
+            if not any(verb in compact for verb in self._PLACEMENT_VERBS):
+                continue
+
+            options: dict = {}
+            if kind in {"rod", "free_rod"}:
+                if "螺纹" in compact:
+                    options["拉杆形式"] = "螺纹拉杆"
+                elif "焊接" in compact:
+                    options["拉杆形式"] = "焊接拉杆"
+                diameter = re.search(r"直径\s*(?:为|是|=|:)?\s*(\d+(?:\.\d+)?)", compact) \
+                    or re.search(r"φ\s*(\d+(?:\.\d+)?)", compact)
+                if diameter:
+                    options["拉杆直径"] = diameter.group(1)
+            elif kind == "slide":
+                if "圆钢" in compact:
+                    options["滑道形式"] = "圆钢滑道"
+                elif "板式" in compact:
+                    options["滑道形式"] = "板式滑道"
+            elif kind == "impingement":
+                if "焊接" in compact:
+                    options["防冲板形式"] = "焊接式"
+                    kind = "impingement_folded"
+                elif "圆弧" in compact:
+                    options["防冲板形式"] = "圆弧形"
+                elif "平板" in compact:
+                    options["防冲板形式"] = "平板形"
+
+            match = re.search(r"(\d+)\s*(?:根|块|个|条|颗|件)", compact)
+            if match:
+                count = int(match.group(1))
+            elif any(word in compact for word in ("几", "若干", "一些")):
+                count = 4
+            else:
+                count = 1
+
+            if "外围" in compact or "对称" in compact:
+                region = "edge_symmetric"
+            elif "壳壁" in compact or "最外" in compact or "外圈" in compact:
+                region = "near_shell"
+            elif "上方" in compact or "顶部" in compact or "顶上" in compact:
+                region = "top"
+            elif "下方" in compact or "底部" in compact:
+                region = "bottom"
+            elif "左侧" in compact or "左边" in compact:
+                region = "left"
+            elif "右侧" in compact or "右边" in compact:
+                region = "right"
+            elif "均布" in compact or "均分" in compact:
+                region = "uniform"
+            else:
+                region = "any"
+
+            return PlacementItem(
+                kind=kind,
+                count=count,
+                region=normalize_region(region, kind),
+                options=options,
+            )
+        return None
 
     def _handle_parameter_sentence(self, text: str) -> bool:
         """把“换热管中心距改成34毫米”这类句子落到对应 Tab 的参数上。"""
@@ -1124,7 +1898,97 @@ class DesignWindow(QMainWindow):
         if rejected:
             lines.append("\n未执行：")
             lines.extend(f"• {item}" for item in rejected)
+
+        items: list[PlacementItem] = []
+        placement_rejected = list(result.get("placement_rejected") or [])
+        for raw in result.get("placements", []) or []:
+            if not isinstance(raw, dict):
+                continue
+            kind = normalize_kind(raw.get("kind"))
+            if kind is None:
+                raw_kind = str(raw.get("kind") or "").strip()
+                if raw_kind:
+                    placement_rejected.append(f"不认识的元件「{raw_kind}」")
+                continue
+            try:
+                items.append(PlacementItem(
+                    kind=kind,
+                    count=int(raw.get("count", 1) or 1),
+                    region=normalize_region(raw.get("region"), kind),
+                    options=dict(raw.get("options") or {}),
+                    note=raw.get("note", ""),
+                ))
+            except (TypeError, ValueError):
+                continue
+        if not items and not applied:
+            # 模型没给出方案时兜底：用户确实在要求布置元件，就按本地规则补一版方案卡
+            fallback = self._parse_placement_words(re.sub(r"\s+", "", self._last_user_text or ""))
+            if fallback is not None:
+                items.append(fallback)
+                lines.append("\n模型没有给出结构化布置项，我按常规规则补了一版方案，请确认。")
+        if items:
+            lines.append("\n方案已生成，图上已高亮选中的换热管，确认后布置。")
+        if placement_rejected:
+            lines.append("\n方案中未采纳的部分：")
+            lines.extend(f"• {item}" for item in placement_rejected)
+
         self.append_chat("assistant", "\n".join(lines))
+        if items:
+            self._show_placement_card(items)
+
+    # ---------------- 元件布置方案（先过目，再落地）----------------
+    def _show_placement_card(self, items: list[PlacementItem]) -> None:
+        """把方案渲染成卡片；图形此时还没有任何改动。"""
+        page = self.pages.get(1)
+        if not isinstance(page, TubeLayoutPage):
+            if self.session is None or not self.session.approved[0]:
+                self.append_chat(
+                    "assistant",
+                    "布置方案需要布管页：请先保留“管板型式”，进入“布管”后再确认这版方案。",
+                )
+                return
+            page = self._ensure_page(1)
+        preview = page.preview_placement(items)
+        card = PlacementPlanCard(items, preview, page=page)
+        card.confirm_requested.connect(self._confirm_placement)
+        card.discard_requested.connect(self._discard_placement)
+        self.placement_cards.append(card)
+        self.conversation.append_widget(card)
+
+    def _placement_page(self) -> TubeLayoutPage | None:
+        page = self.pages.get(1)
+        return page if isinstance(page, TubeLayoutPage) else None
+
+    def _confirm_placement(self, card: PlacementPlanCard) -> None:
+        page = self._placement_page()
+        if page is None:
+            card.mark_applied({"ok": False, "rows": [], "message": "布管页尚未生成"})
+            return
+        result = page.apply_placement_plan(card.items)
+        card.mark_applied(result)
+        if not result.get("ok"):
+            return
+        # 布置改动了布管内容：已保留的状态要按正式流程作废后续 Tab
+        self._on_stage_edited("布管")
+        # 让用户直接看到图形结果：当前不在布管页就切过去
+        if self.session is not None and self.session.current_index != 1:
+            if self.session.approved[0]:
+                self.open_stage(1)
+        elif self.card is not None:
+            # 图形就在上方固定预览区，把下方对话滚到底即可
+            self.conversation._scroll_to_bottom()
+        self.notify(
+            f"方案已落地：共布置 {sum(row['placed'] for row in result['rows'])} 个元件，"
+            f"当前 {result.get('holes_after', 0)} 个换热管孔"
+        )
+
+    def _discard_placement(self, card: PlacementPlanCard) -> None:
+        card.mark_discarded()
+        page = self._placement_page()
+        if page is not None:
+            # 方案作废，把图上高亮的参照管也取消掉
+            page.select_centers([])
+        self.notify("已放弃这版布置方案，布管图没有改动")
 
     def _start_worker(self, fn, callback):
         self._worker_cancelled = False
@@ -1199,10 +2063,15 @@ class DesignWindow(QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self.append_chat("assistant", "当前要求仍在处理中，完成后再新建对话。")
             return
+        self._clear_preview()
         self.conversation.clear()
         self.chat_history = []
-        self.card = None
+        self.placement_cards = []
+        for page in self.pages.values():
+            page.setParent(None)
+            page.deleteLater()
         self.pages.clear()
+        self.preview_host.hide()
         self.session = None
         self._refresh_stage_buttons()
         self.append_chat("assistant", "对话已清空。点击左侧“开始管束设计”重新读取数据库。")

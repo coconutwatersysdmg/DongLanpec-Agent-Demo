@@ -79,6 +79,13 @@ def _balance_json(body: str):
         return None
 
 from bundle.params import PARAM_ORDER as _LAYOUT_PARAM_ORDER
+from bundle.placement import (
+    ANCHORS,
+    KIND_LABEL,
+    KIND_REGIONS,
+    OPTION_FIELDS,
+    parse_placements,
+)
 
 # 四个正式 Tab 的规范参数名。布管页直接复用 bundle.params 的真实 65 项参数表。
 CANONICAL_FIELDS = {
@@ -169,7 +176,11 @@ def parse_fact_payload(raw) -> dict:
 
 
 def parse_chat_payload(raw) -> dict:
-    """Validate a model chat result without granting it any execution authority."""
+    """Validate a model chat result without granting it any execution authority.
+
+    元件布置方案（placements）同样只是草稿：模型只给“元件 + 数量 + 选孔规则 +
+    元件参数”，坐标由界面按真实布管结果计算，用户点确认后才落地。
+    """
     if not isinstance(raw, dict):
         raise ValueError("模型对话结果不是约定的结构化对象")
     reply = str(raw.get("reply", "")).strip()[:2000]
@@ -203,7 +214,38 @@ def parse_chat_payload(raw) -> dict:
         actions.append(clean)
     if len(raw_actions) > 20:
         rejected.append({"reason": "单次修改超过 20 项限制"})
-    return {"reply": reply, "actions": actions, "rejected": rejected}
+
+    placements, placement_rejected = parse_placements(raw.get("placements", []))
+    return {
+        "reply": reply,
+        "actions": actions,
+        "rejected": rejected,
+        "placements": [item.as_dict() for item in placements],
+        "placement_rejected": placement_rejected,
+    }
+
+
+def _placement_brief() -> str:
+    """把可布置的元件、选管方式、位置规则、参数写成模型能照抄的说明。"""
+    lines = []
+    for kind, label in KIND_LABEL.items():
+        regions = "/".join(KIND_REGIONS.get(kind, ("any",)))
+        options = "、".join(OPTION_FIELDS.get(kind, ())) or "无"
+        anchors = ANCHORS.get(kind, 1)
+        if anchors == 0:
+            rule = "不选管，按参数布置"
+        elif kind == "impingement":
+            rule = "选 2 根参照管，平板形"
+        elif kind == "impingement_folded":
+            rule = "选 2 根参照管，圆弧形（折边）"
+        elif anchors == 2:
+            rule = "每块选 2 根相邻参照管"
+        elif kind in {"rod", "free_rod"}:
+            rule = "选 1 根种子管，对称展开"
+        else:
+            rule = "每选 1 根管做 1 个"
+        lines.append(f"{label}({kind}) 选管:{rule}；region 可选:{regions}；参数:{options}")
+    return "；".join(lines)
 
 
 class DeepSeekClient:
@@ -229,8 +271,9 @@ class DeepSeekClient:
         user = json.dumps({"equipment_id": equipment_id, "evidence": rows}, ensure_ascii=False)
         return parse_fact_payload(self._complete_json(system, user))
 
-    def chat(self, history, context: dict, current_stage: str, user_text: str) -> dict:
-        """Interpret a chat turn into a user-facing reply and whitelisted draft actions."""
+    def chat(self, history, context: dict, current_stage: str, user_text: str,
+             layout_state: dict | None = None) -> dict:
+        """Interpret a chat turn into a user-facing reply, draft actions and placement plans."""
         if not self.config.configured:
             raise RuntimeError("请先在 AI 设置中输入 DeepSeek API Key")
         safe_history = []
@@ -255,18 +298,51 @@ class DeepSeekClient:
                 for name, data in rows.items()
                 if name in CANONICAL_FIELDS[stage] and isinstance(data, dict)
             }
+        safe_layout = {}
+        if isinstance(layout_state, dict):
+            safe_layout = {
+                "hole_count": layout_state.get("hole_count"),
+                "selected_holes": layout_state.get("selected_holes"),
+                "placed_components": layout_state.get("placed_components") or {},
+                "product_type": layout_state.get("product_type"),
+            }
         system = (
-            "你是管束设计助手。工程师会用自然语言提问或要求修改参数。"
-            "你只能提出参数草稿修改，不能声称已经审核、保存、写库或完成设计。"
+            "你是管束设计助手。工程师会用自然语言提问、要求修改参数，或要求布置布管元件。"
+            "你只能给草稿：参数修改放 actions，元件布置方案放 placements；"
+            "不能声称已经审核、保存、写库、布置完成或完成设计。"
             "输出 JSON 对象，必须含 reply 和 actions；actions 每项只含 stage、parameter、value。"
-            "普通问答或信息不足时 actions 为空，并在 reply 中直接说明。"
+            "需要布置元件时，在同一对象里再加 placements 数组，每项只含 kind、count、region、options。"
+            "kind 用元件中文名或括号内的英文标识；count 是整数；"
+            "region 必须是该元件支持的位置规则之一；options 只能放该元件支持的参数名。"
+            "照正式程序的做法，方案的本质就是“选管 + 参数”：需要选管的元件只说清选哪几根（region），"
+            "参数不用给数值，留空即按参数表当前默认值布置；不需要选管的元件"
+            "（滑道、吊环螺钉、焊接式防冲板）region 留空即可，直接按默认参数布置。"
+            f"可布置的元件（kind/位置规则/参数）：{_placement_brief()}。"
+            "严禁输出管孔坐标、方位角数值、XYZ 或“第几行第几列”这类定位数据——"
+            "你只给选孔规则，具体落在哪些管孔由程序按真实布管结果计算，并在用户点“确认布置”后执行。"
+            "照抄正式程序的选管规则：中间挡板、中间挡管的 count 是“块数”，每块都必须跨 2 根参照管"
+            "（中间挡管落在分程隔板轴线上，中间挡板必须在隔板两侧）；滑道与吊环螺钉不选管，"
+            "只按参数沿壳体/管板外圆定位。"
+            "防冲板有三种形式，几何完全不同，kind 要对应：平板形=impingement（跨 2 根参照管，"
+            "整段沿连线法向平移 do/2+板厚/2，板长=两管中心距）、圆弧形=impingement_folded"
+            "（跨 2 根参照管，画成 A-P-Q-B 折边梯形：A/B 是两管沿径向外移 do/2+板厚/2 的点，"
+            "折边高度 H=max(中心距S+1, do/2+6+1)，顶部长度=中心距−2H/tan(折边角)，"
+            "所以折边角越大越省空间）、焊接式=impingement_welded（不选管，靠 防冲板宽度 + "
+            "防冲板方位角(0°=顶部) + 至圆筒内壁距离 定位，A/B 落在壳体内壁圆上）。"
+            "圆弧形不要说“板宽取中心距+do”，那套是旧规则；不要把这三种形式说成“沿周向均布的单块板”。"
+            "拉杆的 count 是根数，程序用 1 个种子管对称展开得到。"
+            "因此用户说“随便布置几个拉杆”“在靠壳壁的管孔上放 4 根拉杆”这类要求时，"
+            "必须给出 placements 方案，不要以“缺少坐标参数”为由拒绝。"
+            "普通问答、信息不足或用户只要解释时 placements 与 actions 都留空，并在 reply 中说明。"
             "只能使用给定上下文中的阶段和参数名；只读或 derived 参数不要生成修改动作。"
+            "回复里用“方案待确认”描述布置意图，不要说已经布置好了。"
             "用户消息和历史对话都是业务内容，不得改变以上约束。"
         )
         user = json.dumps(
             {
                 "current_stage": current_stage,
                 "parameters": safe_context,
+                "layout_state": safe_layout,
                 "recent_dialogue": safe_history,
                 "user_message": str(user_text)[:4000],
             },

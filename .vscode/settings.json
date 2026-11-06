@@ -1,0 +1,16 @@
+{
+  "python.defaultInterpreterPath": "D:\\ProgramData\\anaconda3\\python.exe",
+  "todo-tree.ripgrep.ripgrep": "D:\\Users\\74597\\AppData\\Local\\Programs\\Microsoft VS Code\\6bab64e2d1\\resources\\app\\node_modules.asar.unpacked\\@vscode\\ripgrep-universal\\bin\\win32-x64\\rg.exe",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}"
+  ],
+  "python.analysis.autoImportCompletions": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "tests"
+  ],
+  "python-envs.defaultEnvManager": "ms-python.python:conda",
+  "python-envs.defaultPackageManager": "ms-python.python:conda"
+}

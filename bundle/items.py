@@ -20,6 +20,7 @@ CENTER_BAFFLE_COLOR = QColor(128, 0, 128)  # 中间挡板：紫
 BYPASS_COLOR = QColor(0, 128, 0)           # 旁路挡板：绿
 SLIDE_COLOR = QColor(0, 160, 60)           # 滑道：绿
 IMPINGE_COLOR = QColor(70, 110, 180)       # 防冲板：蓝灰
+IMPINGE_PEN_COLOR = QColor(0, 0, 139)      # 防冲板轮廓线：深蓝（正式程序 QColor(0,0,139)）
 SELECTED_PEN_COLOR = QColor(255, 215, 0)
 SELECTED_FILL = QColor(173, 216, 230)
 
@@ -49,12 +50,18 @@ class _Selectable:
 
 
 class TubeItem(_Selectable, QGraphicsEllipseItem):
-    """换热管孔。坐标与半径来自正式程序布管接口返回值。"""
+    """换热管孔。坐标与半径来自正式程序布管接口返回值。
+
+    布管接口的 y 向上，Qt 场景的 y 向下；正式程序绘制时统一 `_add(x, -y)`
+    （My_Piping.py 28409 行），这里同样只翻转绘制位置，`self.center` 保留原始坐标，
+    选中/写库/数量表联动都用原值。
+    """
 
     item_kind = "tube"
 
     def __init__(self, center, radius, controller=None):
-        rect = QRectF(center[0] - radius, center[1] - radius, radius * 2, radius * 2)
+        cx, cy = float(center[0]), -float(center[1])
+        rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
         super().__init__(rect)
         self.center = (float(center[0]), float(center[1]))
         self.radius = float(radius)
@@ -84,7 +91,8 @@ class RodItem(_Selectable, QGraphicsEllipseItem):
     item_kind = "rod"
 
     def __init__(self, center, radius, controller=None, free=False):
-        rect = QRectF(center[0] - radius, center[1] - radius, radius * 2, radius * 2)
+        cx, cy = float(center[0]), -float(center[1])
+        rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
         super().__init__(rect)
         self.center = (float(center[0]), float(center[1]))
         self.radius = float(radius)
@@ -142,7 +150,8 @@ class ComponentRectItem(_Selectable, QGraphicsRectItem):
         self.base_brush = QBrush(fill)
         self.setPen(self.base_pen)
         self.setBrush(self.base_brush)
-        self.setZValue(10)
+        # 元件画在轴线（z=15）之上、壳体圆（z=20）之下，避免被坐标轴盖住
+        self.setZValue(16)
         self._init_selectable(controller)
         center = rect.center()
         self.center = (float(center.x()), float(center.y()))
@@ -165,6 +174,47 @@ class SlideItem(ComponentRectItem):
 
     def __init__(self, rect, controller=None):
         super().__init__(rect, controller, kind="slide", label="滑道", color=SLIDE_COLOR)
+
+
+class FoldedPlateItem(_Selectable, QGraphicsPathItem):
+    """防冲板（圆弧形 / 焊接式）：A-P-Q-B 折边轮廓，线宽 = 防冲板厚度。
+
+    正式程序用 `QPainterPath` + 宽度 = 板厚的 pen 画这条折线（不填充），
+    这里保持一致，因此图形上看到的是“有厚度的折边板”而不是一个矩形。
+    """
+
+    def __init__(self, path, controller=None, kind="impingement_folded", label="防冲板",
+                 thickness=10.0, color=None):
+        super().__init__(path)
+        self.item_kind = kind
+        self.label = label
+        self.thickness = float(thickness or 1.0)
+        color = color or IMPINGE_PEN_COLOR
+        pen = QPen(color)
+        pen.setWidthF(max(self.thickness, 1.0))
+        pen.setCapStyle(Qt.FlatCap)
+        pen.setJoinStyle(Qt.MiterJoin)
+        self.base_pen = pen
+        self.setPen(pen)
+        self.setBrush(QBrush(Qt.NoBrush))
+        # 与矩形类元件一致：盖住坐标轴（z=15）、在壳体圆（z=20）之下
+        self.setZValue(16)
+        self._init_selectable(controller)
+        box = path.boundingRect()
+        self.center = (float(box.center().x()), float(box.center().y()))
+        self.setToolTip(f"{label}（轮廓线宽 = 板厚 {self.thickness:g} mm）")
+
+    def paint(self, painter, option, widget=None):  # noqa: N802 - Qt API
+        if self.is_selected:
+            pen = QPen(SELECTED_PEN_COLOR)
+            pen.setWidthF(max(self.thickness, 1.0) + 2.0)
+            pen.setCapStyle(Qt.FlatCap)
+            painter.setPen(pen)
+            painter.setBrush(QBrush(Qt.NoBrush))
+        else:
+            painter.setPen(self.base_pen)
+            painter.setBrush(QBrush(Qt.NoBrush))
+        painter.drawPath(self.path())
 
 
 class RadialHoleItem(_Selectable, QGraphicsPathItem):

@@ -18,7 +18,8 @@ from PyQt5.QtGui import QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
-    QFormLayout,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -120,6 +121,38 @@ class TubePassFormComboBox(QComboBox):
         super().showPopup()
 
 
+class RightAlignedComboBox(QComboBox):
+    """参数值右对齐的下拉框（正式程序参数表里“参数值”整列都是右对齐）。
+
+    QComboBox 非可编辑时由样式绘制文字，Qt 没有给“闭合态文字对齐”的接口，
+    所以这里改成“只读 lineEdit + 右对齐”，下拉箭头、弹窗行为保持不变。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.NoInsert)
+        line = self.lineEdit()
+        if line is not None:
+            line.setReadOnly(True)
+            line.setFrame(False)
+            line.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            line.setStyleSheet(
+                "QLineEdit{background:transparent;border:none;color:#1f2329;"
+                "padding:0 16px 0 0;}"
+            )
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt API
+        # 只读 lineEdit 不会自己弹下拉，这里补上，点整块区域都能选；
+        # 可编辑下拉保持原生行为，否则点一下就没法手工输入了。
+        line = self.lineEdit()
+        if event.button() == Qt.LeftButton and line is not None and line.isReadOnly():
+            self.showPopup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 @dataclass
 class ParamField:
     """弹窗中的一个参数行。"""
@@ -135,88 +168,105 @@ class ParamField:
 
 
 class ComponentParamDialog(QDialog):
-    """布置元件前的参数确认弹窗（正式程序同名弹窗的等价实现）。"""
+    """布置元件前的参数确认弹窗（正式程序同名弹窗的等价实现）。
+
+    版式按 Demo 的整体风格重做：白底、细边框输入框、右对齐数值、主按钮蓝色，
+    不再用 QFormLayout 默认那套“灰标签 + 高高低低的控件”的旧面孔。
+    """
+
+    LABEL_WIDTH = 112
 
     def __init__(self, title: str, fields: list[ParamField], values: dict,
                  hint: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.setMinimumWidth(400)
-        self.setStyleSheet("QDialog{background:#ffffff;}")
+        # 去掉标题栏那个没用的“?”帮助按钮
+        self.setWindowFlags(
+            (self.windowFlags() | Qt.WindowCloseButtonHint)
+            & ~Qt.WindowContextHelpButtonHint
+        )
+        self.setMinimumWidth(430)
+        self.setStyleSheet(
+            "QDialog{background:#ffffff;}"
+            "QLabel{background:transparent;}"
+        )
         self._fields = fields
         self._editors: dict[str, QWidget] = {}
         self._rows: dict[str, QWidget] = {}
         self._labels: dict[str, QWidget] = {}
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(22, 18, 22, 16)
+        root.setSpacing(12 if hint else 14)
+
         if hint:
             hint_label = QLabel(hint)
             hint_label.setWordWrap(True)
-            hint_label.setStyleSheet("color:#8f949c;font-size:9pt;")
+            hint_label.setStyleSheet(
+                "QLabel{background:#f6f8fb;border:1px solid #eef1f6;border-radius:8px;"
+                "color:#5b6472;font-size:9pt;padding:9px 11px;}"
+            )
             root.addWidget(hint_label)
 
         form_host = QWidget()
-        form = QFormLayout(form_host)
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(8)
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        for spec in fields:
+        grid = QGridLayout(form_host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(11)
+        grid.setColumnMinimumWidth(0, self.LABEL_WIDTH)
+        grid.setColumnStretch(1, 1)
+        for row_index, spec in enumerate(fields):
+            label = QLabel(f"{spec.name}")
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setFixedWidth(self.LABEL_WIDTH)
+            label.setStyleSheet("QLabel{color:#3d4653;font-size:10pt;}")
+            self._labels[spec.name] = label
+
             container = QWidget()
             row = QHBoxLayout(container)
             row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(6)
+            row.setSpacing(7)
             value = "" if values.get(spec.name) is None else str(values.get(spec.name))
-            if spec.kind == "combo":
-                editor = QComboBox()
-                editor.setEditable(False)
-                editor.addItems(list(spec.options))
-                index = editor.findText(value)
-                editor.setCurrentIndex(index if index >= 0 else 0)
-            else:
-                editor = QLineEdit(value)
-                editor.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                if spec.kind == "readonly":
-                    editor.setReadOnly(True)
-                    editor.setStyleSheet(
-                        "QLineEdit{background:#f4f6f8;color:#6b7280;"
-                        "border:1px solid #eef0f3;border-radius:4px;padding:3px 6px;}"
-                    )
-            editor.setStyleSheet(
-                editor.styleSheet()
-                or "QLineEdit{background:#fff;border:1px solid #e6e5e2;border-radius:4px;padding:3px 6px;}"
-            )
+            editor = self._make_editor(spec, value)
             row.addWidget(editor, 1)
             if spec.unit:
                 unit = QLabel(spec.unit)
-                unit.setStyleSheet("color:#8f949c;")
-                row.addWidget(unit)
+                unit.setMinimumWidth(18)
+                unit.setStyleSheet("QLabel{color:#9aa1ab;font-size:9.5pt;}")
+                row.addWidget(unit, 0, Qt.AlignVCenter)
             if spec.tip:
                 container.setToolTip(spec.tip)
             self._editors[spec.name] = editor
             self._rows[spec.name] = container
-            label = QLabel(f"{spec.name}：")
-            self._labels[spec.name] = label
-            form.addRow(label, container)
+            grid.addWidget(label, row_index, 0)
+            grid.addWidget(container, row_index, 1)
+        # 多出来的高度留给最后一行空白行，别把最后一行控件拉高（单位会往下跑）
+        grid.setRowStretch(len(fields), 1)
         root.addWidget(form_host)
 
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet("QFrame{background:#f0f1f3;border:none;}")
+        root.addWidget(line)
+
         buttons = QHBoxLayout()
+        buttons.setSpacing(10)
         buttons.addStretch()
         cancel = QPushButton("取消")
         confirm = QPushButton("确定")
         confirm.setDefault(True)
         for button in (cancel, confirm):
             button.setCursor(Qt.PointingHandCursor)
-            button.setMinimumWidth(80)
-            button.setStyleSheet(
-                "QPushButton{background:#fff;border:1px solid #dcdde0;border-radius:7px;padding:6px 16px;}"
-                "QPushButton:hover{background:#f5f7fa;}"
-            )
+            button.setMinimumSize(84, 34)
+        cancel.setStyleSheet(
+            "QPushButton{background:#ffffff;border:1px solid #dfe2e7;border-radius:8px;"
+            "color:#4b5563;font-size:10pt;}"
+            "QPushButton:hover{background:#f5f7fa;border-color:#cfd6e2;}"
+        )
         confirm.setStyleSheet(
-            "QPushButton{background:#2f6fe4;color:#fff;border:none;border-radius:7px;padding:6px 18px;}"
+            "QPushButton{background:#2f6fe4;color:#ffffff;border:none;border-radius:8px;"
+            "padding:7px 22px;font-size:10pt;font-weight:600;}"
             "QPushButton:hover{background:#2a63cc;}"
         )
         cancel.clicked.connect(self.reject)
@@ -230,6 +280,40 @@ class ComponentParamDialog(QDialog):
             if isinstance(editor, QComboBox):
                 editor.currentIndexChanged.connect(self._apply_visibility)
         self._apply_visibility()
+
+    @staticmethod
+    def _make_editor(spec: ParamField, value: str) -> QWidget:
+        """统一观感的输入控件：下拉右对齐、数字右对齐、只读灰底。"""
+        base = (
+            "QLineEdit{background:#ffffff;border:1px solid #dfe2e7;"
+            "border-radius:7px;padding:6px 9px;font-size:10pt;color:#1f2329;"
+            "min-height:20px;}"
+            "QComboBox{background:#ffffff;border:1px solid #dfe2e7;"
+            "border-radius:7px;padding:6px 26px 6px 9px;font-size:10pt;"
+            "color:#1f2329;min-height:20px;}"
+            "QLineEdit:focus,QComboBox:focus{border-color:#2f6fe4;}"
+            "QComboBox QAbstractItemView{outline:none;border:1px solid #dfe2e7;"
+            "selection-background-color:#eaf1fe;selection-color:#2458b8;padding:2px;}"
+        )
+        if spec.kind == "combo":
+            editor = RightAlignedComboBox()
+            editor.addItems(list(spec.options))
+            index = editor.findText(value)
+            editor.setCurrentIndex(index if index >= 0 else 0)
+            editor.setMinimumWidth(190)
+            editor.setStyleSheet(base)
+            return editor
+        editor = QLineEdit(value)
+        editor.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        if spec.kind == "readonly":
+            editor.setReadOnly(True)
+            editor.setStyleSheet(
+                "QLineEdit{background:#f6f7f9;border:1px solid #eceef2;border-radius:7px;"
+                "padding:6px 9px;color:#6b7280;font-size:10pt;min-height:20px;}"
+            )
+            return editor
+        editor.setStyleSheet(base)
+        return editor
 
     # ---- 显隐 / 校验 ----
     def _values_now(self) -> dict:

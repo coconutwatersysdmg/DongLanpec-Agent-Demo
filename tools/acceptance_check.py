@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from PyQt5.QtCore import QItemSelectionModel, QRectF, Qt  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QGraphicsPathItem  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QGraphicsPathItem, QLabel  # noqa: E402
 
 RESULTS: list[tuple[bool, str, str]] = []
 
@@ -46,6 +47,11 @@ def main() -> int:
     window.show()
     app.processEvents()
     check(True, "2 Demo 可独立启动（聊天式界面）", f"初始消息 {len(window.chat_history)} 条")
+    check(
+        window.preview_host.isHidden() and window.card is None,
+        "2.1 未开始设计时不留空白预览区",
+        "preview_host 隐藏" if window.preview_host.isHidden() else "预览区可见",
+    )
     check(not window.config.configured or True, "13 未配置 API Key 也能继续", "离线规则可用")
 
     ok_db, message = window.repository.ping()
@@ -101,11 +107,41 @@ def main() -> int:
     check(combo >= 5 and editable_combo >= 1 and kinds.get("number", 0) >= 10,
           "5.2 参数编辑控件类型沿用正式程序", f"普通下拉 {combo}、可输入下拉 {editable_combo}、数字 {kinds.get('number', 0)}")
 
-    from PyQt5.QtWidgets import QComboBox
+    from PyQt5.QtWidgets import QComboBox, QLineEdit
+
+    from bundle.widgets import RightAlignedComboBox
+
     combo_editors = [w for w in page._editors.values() if isinstance(w, QComboBox)]
-    readonly_combo = [w for w in combo_editors if not w.isEditable()]
-    check(all(w.isEditable() is False for w in readonly_combo) and len(readonly_combo) > 0,
-          "5.3 普通下拉框不可手工输入", f"{len(readonly_combo)} 个不可编辑下拉")
+    plain_combos = [w for w in combo_editors if isinstance(w, RightAlignedComboBox)]
+    locked_combos = [
+        widget for name, widget in page._editors.items()
+        if isinstance(widget, RightAlignedComboBox)
+        and bundle_params.spec_for(name, page.product_type, page.parameters).kind == "combo"
+    ]
+    check(
+        bool(locked_combos)
+        and all(
+            w.lineEdit() is not None and w.lineEdit().isReadOnly() for w in locked_combos
+        ),
+        "5.3 普通下拉框不可手工输入",
+        f"{len(locked_combos)} 个普通下拉只读（文字右对齐），"
+        f"{len(plain_combos) - len(locked_combos)} 个可输入下拉保持可编辑",
+    )
+
+    # 5.7 参数值整列右对齐（数字框 + 下拉框文字都靠右）
+    edits = [w for w in page._editors.values() if isinstance(w, QLineEdit)]
+    right_edits = [w for w in edits if bool(w.alignment() & Qt.AlignRight)]
+    right_combos = [
+        w for w in plain_combos
+        if w.lineEdit() is not None and bool(w.lineEdit().alignment() & Qt.AlignRight)
+    ]
+    check(
+        len(right_edits) == len(edits)
+        and len(right_combos) == len(plain_combos)
+        and len(edits) + len(plain_combos) >= 20,
+        "5.7 参数值整列右对齐（数字框与下拉框文字都靠右）",
+        f"数字框 {len(right_edits)}/{len(edits)}、下拉框 {len(right_combos)}/{len(plain_combos)}",
+    )
 
     # 5.5 左侧参数表按正式程序 hidden_params 隐藏元件参数
     hidden_names = [
@@ -244,6 +280,84 @@ def main() -> int:
     check(len(page.selected) == 1 and highlighted_rows,
           "8 图形点击后右侧表格同步高亮", f"高亮行 {highlighted_rows}")
 
+    # 8.5 正式程序的选管是“切换”：点第二根不会顶掉第一根（除非再点它自己）
+    page.select_centers([])
+    first_tube, second_tube = sorted(page._tube_items)[:2]
+    page.item_clicked(page._tube_items[first_tube], Qt.NoModifier)
+    page.item_clicked(page._tube_items[second_tube], Qt.NoModifier)
+    both_selected = (
+        len(page.selected) == 2
+        and page._tube_items[first_tube].is_selected
+        and page._tube_items[second_tube].is_selected
+    )
+    page.item_clicked(page._tube_items[first_tube], Qt.NoModifier)
+    check(
+        both_selected and len(page.selected) == 1 and second_tube in page.selected,
+        "8.5 单击换热管是累加选中（点第二根不会取消第一根）",
+        f"连点两根 → 选中 {2 if both_selected else '?'} 个；再点第一根 → 剩 {len(page.selected)} 个",
+    )
+
+    # 8.6 行号列号 ↔ 绝对坐标必须一一对应（方案卡让用户改的就是这两个号）
+    lost = []
+    for center in page.current_centers():
+        rc = page.tube_row_col(center)
+        if rc is None or page.center_for_row_col(*rc) != center:
+            lost.append(center)
+    check(
+        not lost,
+        "8.6 换热管的“第几行第几列”与绝对坐标一一对应",
+        f"{len(page.current_centers())} 个管孔全部可反查" if not lost else f"{len(lost)} 个对不上",
+    )
+
+    # 8.7 对称分布勾选框（正式程序 My_Piping.symmetric_checkbox：浮在图形右上角、默认勾选）
+    sym_box = page.symmetry_check
+    default_on = bool(sym_box.isChecked()) and page.symmetry_on()
+    seed = next(
+        c for c in page.current_centers()
+        if abs(c[0]) > 1.0 and abs(c[1]) > 1.0
+        and (c[0], -c[1]) in set(page.current_centers())
+        and (-c[0], c[1]) in set(page.current_centers())
+    )
+    page.set_symmetry(False)
+    off_group = page._linkage_expand([seed])
+    page.set_symmetry(True)
+    on_group = page._linkage_expand([seed])
+    check(
+        default_on and len(off_group) == 2 and len(on_group) == 4,
+        "8.7 布管页有“对称分布”勾选框（默认勾选；关掉只按管程单轴镜像）",
+        f"默认勾选={default_on}；不勾 {len(off_group)} 点、勾选 {len(on_group)} 点（4 象限）",
+    )
+
+    # 8.8 普通拉杆和换热管同性质：点两根拉杆都留在选中里，且能当防冲板参照管
+    page.set_symmetry(False)
+    page.clear_selection()
+    pair = sorted(page.current_centers(), key=lambda c: (-round(c[1], 3), c[0]))[:2]
+    page.select_centers(pair)
+    page.place_rod(free=False)
+    rod_items = [
+        item for index, item in page._component_items.items()
+        if page.components[index]["kind"] == "rod"
+    ]
+    page.clear_selection()
+    for item in rod_items[:2]:
+        page.item_clicked(item, Qt.NoModifier)
+    rods_both = len(page.selected) == 2 and all(item.is_selected for item in rod_items[:2])
+    placed_before = len(page.components)
+    page.place_impingement()
+    plate = page.components[-1] if len(page.components) > placed_before else None
+    deleted_keys = {tuple(coord) for coord in (plate.get("deleted") or [])} if plate else set()
+    rods_kept = all(tuple(item.center) not in deleted_keys for item in rod_items[:2])
+    check(
+        rods_both and plate is not None and plate.get("form") and rods_kept,
+        "8.8 单击可同时选中两根普通拉杆，并可当防冲板的两根参照管",
+        f"两根拉杆都选中={rods_both}；防冲板 {plate.get('form') if plate else '未布置'}；"
+        f"参照管未被删={rods_kept}",
+    )
+    page.undo()   # 撤防冲板
+    page.undo()   # 撤拉杆
+    page.set_symmetry(True)
+    page.clear_selection()
+
     # 9. 框选
     page.on_rubber_band(QRectF(0, 0, 120, 120))
     app.processEvents()
@@ -358,16 +472,456 @@ def main() -> int:
           f"allow_write={window.repository.allow_write}")
     window.session.approved[3] = True
 
+    # 18.1 AI 给出元件布置方案 → 先出方案卡，确认后才落到图形
+    window.session.current_index = 1
+    window._render_stage(1)
+    comps_before = len(page.components)
+    holes_before = len(page.current_centers())
+    window._handle_ai_result({
+        "reply": "我按常规做法给出一版布置方案。",
+        "actions": [],
+        "placements": [
+            {"kind": "拉杆", "count": 4, "region": "靠近壳壁",
+             "options": {"拉杆形式": "螺纹拉杆", "拉杆直径": 16}},
+            {"kind": "旁路挡板", "count": 4, "region": "均布"},
+        ],
+        "placement_rejected": [],
+    })
+    ai_card = window.placement_cards[-1] if window.placement_cards else None
+    check(
+        ai_card is not None and ai_card.badge.text() == "待确认"
+        and len(page.components) == comps_before,
+        "18.1 AI 元件布置只出方案，确认前图形不变",
+        f"{len(ai_card.items) if ai_card else 0} 条方案，图形元件仍 {len(page.components)} 个",
+    )
+    if ai_card is not None:
+        ai_card.confirm_button.click()
+    check(
+        ai_card is not None and ai_card.badge.text() == "已布置"
+        and len(page.components) == comps_before + 8
+        and len(page.current_centers()) == holes_before - 4,
+        "18.2 确认后 AI 方案直接布置到图形（占用真实管孔）",
+        f"元件 {comps_before}→{len(page.components)}，管孔 {holes_before}→{len(page.current_centers())}",
+    )
+    hole_bound = [comp for comp in page.components if comp["kind"] in {"rod", "free_rod", "block_tube"}]
+    check(
+        len(hole_bound) >= 4
+        and all(comp["center"] in page.result.master_centers for comp in hole_bound),
+        "18.3 落图位置全部来自真实布管结果（AI 未给坐标）",
+        f"校验 {len(hole_bound)} 个占孔类元件中心",
+    )
+
+    # 18.4 圆弧形防冲板 = A-P-Q-B 折边梯形（正式程序 build_impingement_plate 圆弧形分支）
+    from bundle import impingement as impingement_geometry
+    from bundle.placement import PlacementItem, pick_pairs
+
+    do = page._float("换热管外径 do") or 25.0
+    pitch = page._float("换热管中心距 S") or 32.0
+    thickness = page._float("防冲板厚度") or 10.0
+    fold_angle = page._float("防冲板折边角度") or 45.0
+    page.set_parameter("防冲板形式", "圆弧形", "自检", run_linkage=False)
+    min_span = impingement_geometry.required_span_for_folded(do, pitch, fold_angle)
+    pairs = pick_pairs(page.current_centers(), 1, "top", "row", min_span=min_span)
+    comps_before_plate = len(page.components)
+    page.apply_placement_plan([
+        PlacementItem("impingement", 1, "top", {"防冲板形式": "圆弧形"}),
+    ])
+    plate = page.components[comps_before_plate] if len(page.components) > comps_before_plate else None
+    expected_plate = None
+    if pairs and plate is not None:
+        (x1, y1), (x2, y2) = pairs[0]
+        expected_plate = impingement_geometry.folded_geometry(
+            (x1, -y1), (x2, -y2), do, pitch, thickness, fold_angle
+        )
+    plate_ok = bool(
+        plate is not None
+        and expected_plate is not None
+        and plate["kind"] == "impingement_folded"
+        and len(plate["points"]) == 4
+        and all(
+            abs(plate["points"][index][axis] - expected_plate["points"][index][axis]) < 1e-6
+            for index in range(4)
+            for axis in (0, 1)
+        )
+        and abs(plate["height"] - expected_plate["height"]) < 1e-9
+        and expected_plate["top_length"] >= 0
+    )
+    check(
+        plate_ok,
+        "18.4 圆弧形防冲板是 A-P-Q-B 折边梯形（折边高 H / 顶部长度按折边角算）",
+        (
+            f"跨距 {expected_plate['width']:.1f}、折边高 {expected_plate['height']:g}、"
+            f"顶部 {expected_plate['top_length']:.1f}、A/B 径向外移 {expected_plate['clearance']:g}"
+        ) if expected_plate else "未生成防冲板",
+    )
+
+    # 18.4b 平板形防冲板：整段沿法向平移 do/2+板厚/2+0.5，长度 = 两管中心距（不缩不伸）
+    page.set_parameter("防冲板形式", "平板形", "自检", run_linkage=False)
+    page.set_parameter("放置位置", "参照管顶部连线", "自检", run_linkage=False)
+    flat_pairs = pick_pairs(page.current_centers(), 1, "top", "row")
+    flat_before = len(page.components)
+    page.apply_placement_plan([
+        PlacementItem("impingement", 1, "top", {"防冲板形式": "平板形"}),
+    ])
+    flat_plate = page.components[flat_before] if len(page.components) > flat_before else None
+    flat_ok = False
+    if flat_pairs and flat_plate is not None:
+        (x1, y1), (x2, y2) = flat_pairs[0]
+        span = math.hypot(x2 - x1, y2 - y1)
+        shift = do / 2.0 + thickness / 2.0 + 0.5
+        flat_ok = (
+            flat_plate["kind"] == "impingement"
+            and len(flat_plate["points"]) == 2
+            # 屏幕上移 -> 场景 y 减小
+            and abs(flat_plate["points"][0][1] - (-y1 - shift)) < 1e-6
+            and abs(flat_plate["points"][1][1] - (-y2 - shift)) < 1e-6
+            and abs(flat_plate["width"] - span) < 1e-6
+        )
+    check(
+        flat_ok,
+        "18.4b 平板形防冲板按“顶部连线”平移 do/2+板厚/2+0.5，板长=中心距",
+        f"平移量 {do / 2.0 + thickness / 2.0 + 0.5:g}，板长 {round(flat_plate['width'], 1) if flat_plate else 0:g}",
+    )
+
+    # 18.4c 焊接式防冲板：不选管，按 宽度 / 方位角 / 至圆筒内壁距离 定位（A/B 落在壳体内壁圆上）
+    shell_r = (page._float("壳体内直径 Dis") or 1000.0) / 2.0
+    welded_before = len(page.components)
+    page.set_parameter("防冲板形式", "焊接式", "自检", run_linkage=False)
+    page.set_parameter("防冲板宽度", "200", "自检", run_linkage=False)
+    page.set_parameter("防冲板方位角", "0", "自检", run_linkage=False)
+    page.set_parameter("至圆筒内壁距离", "150", "自检", run_linkage=False)
+    page.apply_placement_plan([
+        PlacementItem("impingement", 1, "any", {"防冲板形式": "焊接式"}),
+    ])
+    welded = page.components[welded_before] if len(page.components) > welded_before else None
+    welded_ok = False
+    if welded is not None:
+        points = welded["points"]
+        radii = [math.hypot(x, y) for x, y in points]
+        welded_ok = (
+            welded["kind"] == "impingement_welded"
+            and len(points) == 4
+            # C 点方位角 0° = 顶部：P/Q 在 y = -(R - 距内壁)
+            and abs(points[1][1] + (shell_r - 150.0)) < 1e-6
+            and abs(points[2][1] + (shell_r - 150.0)) < 1e-6
+            and abs(points[2][0] - points[1][0] - 200.0) < 1e-6
+            # A/B 在壳体内壁大圆上
+            and abs(radii[0] - shell_r) < 1e-6
+            and abs(radii[3] - shell_r) < 1e-6
+        )
+    check(
+        welded_ok,
+        "18.4c 焊接式防冲板按参数定位，A/B 落在壳体内壁圆上",
+        f"PQ 在 y={-round(shell_r - 150.0, 1)}、长 200；A/B 半径 {round(math.hypot(*welded['points'][0]), 1) if welded else 0:g}",
+    )
+
+    # 18.4d 圆弧形防冲板落位后立刻删掉干涉换热管（含 2 管程镜像），两块参照管保留
+    page.recompute(reason="自检重置（圆弧形删管）")
+    page.set_parameter("防冲板形式", "圆弧形", "自检", run_linkage=False)
+    folded_item = PlacementItem("impingement", 1, "top", {"防冲板形式": "圆弧形"})
+    folded_preview = page.preview_placement([folded_item])
+    folded_anchors = list(page.selected)
+    holes_pre_folded = len(page.current_centers())
+    page.apply_placement_plan([folded_item])
+    holes_post_folded = len(page.current_centers())
+    deleted_folded = set(page.removed)
+    mirrored_ok = bool(deleted_folded) and all(
+        (x, -y) in deleted_folded for x, y in deleted_folded
+    )
+    anchors_kept = all(c not in deleted_folded for c in folded_anchors)
+    check(
+        holes_pre_folded - holes_post_folded == folded_preview["deletes"] > 0
+        and mirrored_ok and anchors_kept,
+        "18.4d 圆弧形防冲板落位后删掉干涉换热管（管程镜像、参照管保留）",
+        f"管孔 {holes_pre_folded}→{holes_post_folded}"
+        f"（删 {holes_pre_folded - holes_post_folded}，卡片预览算 {folded_preview['deletes']}）",
+    )
+
+    # 18.4e 焊接式防冲板删掉“板与壳顶之间”扇形区的换热管，撤销能恢复
+    page.recompute(reason="自检重置（焊接式删管）")
+    page.set_parameter("防冲板形式", "焊接式", "自检", run_linkage=False)
+    page.set_parameter("防冲板宽度", "200", "自检", run_linkage=False)
+    page.set_parameter("防冲板方位角", "0", "自检", run_linkage=False)
+    page.set_parameter("至圆筒内壁距离", "60", "自检", run_linkage=False)
+    welded_item = PlacementItem("impingement", 1, "any", {"防冲板形式": "焊接式"})
+    holes_pre_welded = len(page.current_centers())
+    page.apply_placement_plan([welded_item])
+    holes_post_welded = len(page.current_centers())
+    near_shell = bool(page.removed) and all(
+        abs(y) > 0.7 * shell_r for _x, y in page.removed
+    )
+    page.undo()
+    holes_undo = len(page.current_centers())
+    check(
+        holes_post_welded < holes_pre_welded and near_shell and holes_undo == holes_pre_welded,
+        "18.4e 焊接式防冲板删掉壳顶扇形区换热管，撤销可恢复",
+        f"管孔 {holes_pre_welded}→{holes_post_welded}，撤销后 {holes_undo}",
+    )
+
+    # 18.5 滑道 / 吊环螺钉按参数定位，不选管也不占管孔
+    holes_before_param = len(page.current_centers())
+    comps_before_param = len(page.components)
+    page.apply_placement_plan([
+        PlacementItem("slide", 1, "any", {}),
+        PlacementItem("screw_ring", 4, "uniform", {}),
+    ])
+    added = page.components[comps_before_param:]
+    slides = [c for c in added if c["kind"] == "slide"]
+    rings = [c for c in added if c["kind"] == "screw_ring"]
+    check(
+        len(slides) == 2 and len(rings) == 4
+        and all(c["center"][1] <= 0 for c in slides)
+        and len(page.current_centers()) == holes_before_param,
+        "18.5 滑道/吊环螺钉按参数定位、不占管孔",
+        f"滑道 {len(slides)} 条（均在底部）、吊环 {len(rings)} 个，"
+        f"管孔 {holes_before_param}→{len(page.current_centers())}",
+    )
+
     # 19. 中文自然语言命令（离线规则）
     before_cmd = len(page.components)
+    holes_before_cmd = len(page.current_centers())
     window.session.current_index = 1
     window._render_stage(1)
     handled = window._handle_local_command("外围对称布置8根拉杆")
-    check(handled, "19 自然语言命令“外围对称布置8根拉杆”被识别", f"元件 {before_cmd}→{len(page.components)}")
+    card = window.placement_cards[-1] if window.placement_cards else None
+    check(
+        handled and card is not None and card.badge.text() == "待确认"
+        and card.items[0].count == 8,
+        "19 自然语言布置先生成方案卡（确认前不改图形）",
+        f"卡片 {len(window.placement_cards)} 张，图形元件仍 {len(page.components)} 个",
+    )
+    if card is not None:
+        card.confirm_button.click()
+    check(
+        len(page.components) == before_cmd + 8
+        and len(page.current_centers()) == holes_before_cmd - 8
+        and card is not None and card.badge.text() == "已布置",
+        "19.1 确认方案后直接在图形化界面布置出来",
+        f"元件 {before_cmd}→{len(page.components)}，管孔 {holes_before_cmd}→{len(page.current_centers())}",
+    )
     handled = window._handle_local_command("为什么这个参数不通过")
-    check(handled, "19.1 “为什么这个参数不通过”给出解释")
+    check(handled, "19.2 “为什么这个参数不通过”给出解释")
     handled = window._handle_local_command("把刚才的修改撤销")
-    check(handled, "19.2 “把刚才的修改撤销”执行撤销")
+    check(handled, "19.3 “把刚才的修改撤销”执行撤销")
+
+    # 19.4 对话自动滚到最新一条（用户不用每次自己拖滚动条）
+    app.processEvents()
+    convo_bar = window.conversation.verticalScrollBar()
+    check(
+        convo_bar.maximum() > 0 and convo_bar.value() >= convo_bar.maximum() - 4,
+        "19.4 对话自动停在最新一条（不用手动拉滚动条）",
+        f"滚动位置 {convo_bar.value()}/{convo_bar.maximum()}",
+    )
+
+    # 22. 图形化界面固定在对话区上方（不随对话滚动）
+    check(
+        hasattr(window, "splitter") and window.splitter.count() == 2
+        and window.splitter.widget(0) is getattr(window, "preview_host", None)
+        and window.splitter.widget(1) is window.conversation
+        and window.card is not None
+        and window.card.parent() is getattr(window, "preview_host", None),
+        "22 图形化界面固定在对话区上方（不随对话滚动）",
+        f"splitter 上={type(window.splitter.widget(0)).__name__} "
+        f"下={type(window.splitter.widget(1)).__name__}",
+    )
+
+    # 22.1 对话区是主界面：至少和预览区一样高（预览只保底“够放下布管页”）
+    sizes = window.splitter.sizes()
+    check(
+        len(sizes) == 2 and sizes[1] >= sizes[0] * 0.95 and window.preview_host.minimumHeight() >= 300,
+        "22.1 对话区不比预览区小（预览只留够用的高度）",
+        f"预览 {sizes[0]} / 对话 {sizes[1]}（预览保底 {window.preview_host.minimumHeight()}）",
+    )
+
+    # 23. 点“布管”按正式程序清空已布置元件
+    #     正式程序 on_buguan_bt_click 会把 lagan / 旁路挡板 / 中挡板 / 防冲板 / 滑道 全部清零
+    comps_before_relayout = len(page.components)
+    page.recompute(reason="自检重新布管")
+    check(
+        comps_before_relayout > 0 and len(page.components) == 0,
+        "23 点“布管”重算时清空已布置元件（与正式程序一致）",
+        f"元件 {comps_before_relayout}→{len(page.components)}",
+    )
+
+    # 24. 方案的本质是“选管”：卡片写出具体参照管，图上先高亮，确认后与高亮一致
+    page.set_parameter("防冲板形式", "圆弧形", "自检", run_linkage=False)
+    plate_item = PlacementItem("impingement", 1, "top", {"防冲板形式": "圆弧形"})
+    preview = page.preview_placement([plate_item])
+    plate_row = preview["rows"][0]
+    picked = sorted(page.selected)
+    check(
+        len(picked) == 2
+        and "(" in plate_row["anchors"] and "–" in plate_row["anchors"]
+        and plate_row["params"].startswith("形式 圆弧形"),
+        "24 方案卡给出“选中的两根参照管”（AI 方案的输入就是选管）",
+        f"参照管 {plate_row['anchors']}；参数 {plate_row['params']}",
+    )
+    page.apply_placement_plan([plate_item])
+    plates = [c for c in page.components if c.get("kind") == "impingement_folded"]
+    plate_ok = False
+    if plates and len(picked) == 2:
+        span = math.hypot(picked[1][0] - picked[0][0], picked[1][1] - picked[0][1])
+        plate_ok = abs(plates[-1]["width"] - span) < 1e-6
+    check(
+        plate_ok,
+        "24.1 确认后落点正好用卡片上那两根参照管（不另选管）",
+        f"板跨距 {round(plates[-1]['width'], 2) if plates else 0:g} = 两管中心距",
+    )
+
+    # 25. 方案卡可编辑：AI 给的方案就是“选两根管 + 一组参数”，两项都能改
+    window.open_stage(1)
+    app.processEvents()
+    window._handle_local_command("上方布置1块圆弧形防冲板")
+    edit_card = window.placement_cards[-1]
+    block = edit_card._blocks[0]
+    refs = block["refs"]
+    base_ok = len(refs) == 2 and all(
+        e.coord_label.text().startswith("(") and e.value() is not None for e in refs
+    )
+    row0, col0 = refs[0].value() if base_ok else (0, 0)
+    taken = {e.value() for e in refs}
+    choices = [
+        c for c in range(-40, 41)
+        if c and (row0, c) not in taken and page.center_for_row_col(row0, c) is not None
+    ]
+    alt_col = min(choices, key=abs) if choices else None
+    moved_ok = False
+    if alt_col is not None:
+        refs[0].col_edit.setText(str(alt_col))
+        refs[0].col_edit.textEdited.emit(str(alt_col))
+        app.processEvents()
+        target = page.center_for_row_col(row0, alt_col)
+        moved_ok = (
+            tuple(edit_card.items[0].anchors[0]) == tuple(target)
+            and refs[0].coord_label.text() == f"({target[0]:.1f}, {target[1]:.1f})"
+        )
+    check(
+        base_ok and moved_ok,
+        "25 方案卡里换热管可按“第几行第几列”改，绝对坐标实时跟着变",
+        f"第 {row0} 行 第 {col0} 列 → 第 {alt_col} 列，坐标 {refs[0].coord_label.text()}",
+    )
+
+    # 25.1 填了不存在的管孔 → 标红并禁止确认
+    refs[0].col_edit.setText("999")
+    refs[0].col_edit.textEdited.emit("999")
+    app.processEvents()
+    invalid_ok = (
+        not edit_card.confirm_button.isEnabled()
+        and refs[0].error_label.isVisible()
+        and "没有这个管孔" in refs[0].error_label.text()
+    )
+    if alt_col is not None:
+        refs[0].col_edit.setText(str(alt_col))
+        refs[0].col_edit.textEdited.emit(str(alt_col))
+        app.processEvents()
+    check(
+        invalid_ok and edit_card.confirm_button.isEnabled(),
+        "25.1 行号列号填错时标红提示并锁住“确认布置”，改回后恢复",
+        refs[0].error_label.text() if invalid_ok else "未拦下非法输入",
+    )
+
+    # 25.2 参数也能改：改板厚后确认，落图的板厚就是卡片上那个值
+    thick_field = next(f for f in block["params"] if f.name == "防冲板厚度")
+    thick_field.editor.setText("14")
+    thick_field.editor.textEdited.emit("14")
+    app.processEvents()
+    comps_before_card = len(page.components)
+    anchors_now = [tuple(a) for a in edit_card.items[0].anchors]
+    edit_card.confirm_button.click()
+    app.processEvents()
+    new_plate = page.components[comps_before_card] if len(page.components) > comps_before_card else None
+    span_now = (
+        math.hypot(anchors_now[1][0] - anchors_now[0][0], anchors_now[1][1] - anchors_now[0][1])
+        if len(anchors_now) == 2 else 0.0
+    )
+    check(
+        new_plate is not None
+        and abs(new_plate["thickness"] - 14.0) < 1e-6
+        and abs(new_plate["width"] - span_now) < 1e-6
+        and page.parameters["防冲板厚度"]["value"] == "14"
+        and edit_card.badge.text() == "已布置",
+        "25.2 方案卡上改参数（板厚 10→14）后确认，落图与参数表都按新值",
+        f"板厚 {new_plate['thickness'] if new_plate else 0:g}、跨距 {round(new_plate['width'], 1) if new_plate else 0:g}"
+        f"（卡片上两管中心距 {span_now:.1f}）",
+    )
+
+    # 25.3 卡片上的“形式”也能改：圆弧形 → 平板形，参数行/删管数/落位几何一起变
+    window._handle_local_command("上方布置1块圆弧形防冲板")
+    app.processEvents()
+    form_card = window.placement_cards[-1]
+    form_block = form_card._blocks[0]
+    tip_gone = not any(
+        label.text() == "行号列号、参数都可直接改"
+        for label in form_card.findChildren(QLabel)
+    )
+    before_names = [field.name for field in form_block["params"]]
+    form_field = next(field for field in form_block["params"] if field.name == "防冲板形式")
+    form_editable = form_field.editor.isEnabled()
+    before_deletes = form_card._preview["deletes"]
+    form_field.editor.setCurrentIndex(form_field.editor.findData("平板形"))
+    for _ in range(3):
+        app.processEvents()
+    after_names = [field.name for field in form_card._blocks[0]["params"]]
+    label_now = form_card._blocks[0]["label"]
+    check(
+        tip_gone and form_editable
+        and "防冲板折边角度" in before_names
+        and "放置位置" in after_names and "防冲板折边角度" not in after_names
+        and label_now == "平板形防冲板",
+        "25.3 方案卡“形式”可改，改完参数列表与标题跟着换",
+        f"圆弧形 {before_names} → 平板形 {after_names}，标题“{label_now}”",
+    )
+    form_card.confirm_button.click()
+    app.processEvents()
+    applied_plate = page.components[-1] if page.components else None
+    check(
+        form_card.badge.text() == "已布置"
+        and applied_plate is not None and applied_plate.get("form") == "平板形"
+        and page.parameters["防冲板形式"]["value"] == "平板形",
+        "25.4 改形式后确认，落图的就是卡片上选的那种形式",
+        f"落图 {applied_plate.get('form') if applied_plate else '-'}、"
+        f"参数表 防冲板形式={page.parameters['防冲板形式']['value']}、"
+        f"删干涉管 {before_deletes}→{len(applied_plate.get('deleted') or []) if applied_plate else 0}",
+    )
+
+    # 26 元件参数弹窗：防冲板弹窗不再塞那段“平板形/圆弧形/焊接式”说明文字
+    captured: dict = {}
+    original_ask = page._ask
+
+    def spy_ask(title, fields, hint=""):
+        captured["title"] = title
+        captured["hint"] = hint
+        return {spec.name: page._param_text(spec.name) for spec in fields}
+
+    page._ask = spy_ask
+    page.select_centers(sorted(page.current_centers(), key=lambda c: (-round(c[1], 3), c[0]))[:2])
+    page.place_impingement()
+    page._ask = original_ask
+    check(
+        captured.get("title") == "防冲板参数设置" and not str(captured.get("hint") or "").strip(),
+        "26 防冲板参数弹窗只留参数，不再堆那段说明文字",
+        f"弹窗“{captured.get('title')}”提示区={'空' if not captured.get('hint') else captured['hint'][:20]}",
+    )
+
+    # 26.1 参数弹窗控件等高（重新排版后不再高高低低）
+    from bundle.widgets import ComponentParamDialog, ParamField
+
+    dialog = ComponentParamDialog(
+        "防冲板参数设置",
+        [ParamField("防冲板形式", "combo", ("平板形", "圆弧形", "焊接式")),
+         ParamField("防冲板厚度", "number", unit="mm"),
+         ParamField("防冲板折边角度", "number", unit="°")],
+        {"防冲板形式": "圆弧形", "防冲板厚度": "10", "防冲板折边角度": "45"},
+    )
+    heights = {dialog._editors[name].height() for name in dialog._editors}
+    dialog.adjustSize()
+    heights = {dialog._editors[name].sizeHint().height() for name in dialog._editors}
+    dialog.deleteLater()
+    check(
+        len(heights) == 1,
+        "26.1 参数弹窗内各控件等高、标签固定列宽（版式统一）",
+        f"控件高度 {sorted(heights)}",
+    )
 
     # 20. 前序修改 → 下游失效
     window.session.current_index = 0

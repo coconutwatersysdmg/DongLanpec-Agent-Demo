@@ -30,8 +30,8 @@ def main():
     parser.add_argument("--screenshot", help="离屏渲染界面截图并保存到该路径，随后退出")
     parser.add_argument("--stage", type=int, default=None, help="截图前展开的 Tab 序号 0-3")
     parser.add_argument("--product", default=None, help="指定要载入的产品ID")
-    parser.add_argument("--width", type=int, default=1720, help="窗口宽度")
-    parser.add_argument("--height", type=int, default=1020, help="窗口高度")
+    parser.add_argument("--width", type=int, default=1920, help="截图窗口宽度")
+    parser.add_argument("--height", type=int, default=1040, help="截图窗口高度")
     args = parser.parse_args()
 
     if args.screenshot:
@@ -46,8 +46,12 @@ def main():
     from window import DesignWindow
 
     window = DesignWindow()
-    window.resize(args.width, args.height)
-    window.show()
+    if args.screenshot:
+        window.resize(args.width, args.height)
+        window.show()
+    else:
+        # 正常启动直接铺满屏幕：对话是主界面，越大越好（仍可点右上角还原）
+        window.showMaximized()
 
     if args.screenshot:
         # 离屏截图不需要事件循环：同步载入会话、展开 Tab、抓图后立即退出。
