@@ -1,6 +1,6 @@
 {
   "python.defaultInterpreterPath": "D:\\ProgramData\\anaconda3\\python.exe",
-  "todo-tree.ripgrep.ripgrep": "D:\\Users\\74597\\AppData\\Local\\Programs\\Microsoft VS Code\\6bab64e2d1\\resources\\app\\node_modules.asar.unpacked\\@vscode\\ripgrep-universal\\bin\\win32-x64\\rg.exe",
+  "todo-tree.ripgrep.ripgrep": "D:\\Users\\74597\\AppData\\Local\\Programs\\Microsoft VS Code\\c4453f8ea4\\resources\\app\\node_modules.asar.unpacked\\@vscode\\ripgrep-universal\\bin\\win32-x64\\rg.exe",
   "python.terminal.activateEnvironment": true,
   "python.analysis.extraPaths": [
     "${workspaceFolder}"
