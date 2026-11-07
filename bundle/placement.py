@@ -1,16 +1,19 @@
-"""AI 元件布置方案：AI 只给“往哪类管孔放、放几个、元件参数”，坐标由程序算。
+"""AI 元件布置 / 换热管增删的方案层：模型给意图（甚至自己挑好管孔），程序负责落地。
 
 这一层刻意不依赖 Qt，也不依赖布管页对象，方便单测与离线复用。
 
-设计约束（沿用原始需求）：
-- Agent 不能编造坐标。模型的输出里没有管孔坐标、没有方位角数值，只有选孔规则
-  （region）。真正落到哪几个管孔，由 `pick_centers()` 按当次真实布管结果计算，
-  同一份方案重复执行结果完全一致。
-- 方案只是“草稿”：先渲染成卡片给用户过目，用户点“确认布置”才落到图形。
+分工（这是 Agent 和“写死规则的程序”的区别）：
+- **判断归模型**：哪几根算“最外层”、删哪几根，模型看着 `plan_view` 那张布管图和
+  真实的行列号自己挑，输出 `tubes=[(row, col), …]`；程序不去猜它的口径。
+- **落地归程序**：把行列号查成真实坐标、高亮、真正删/补、算干涉、写库。
+  模型不给坐标数值，所以不存在“编造坐标”的问题——它给的是图上的行列号，
+  查不到就报错，绝不凑数。
+- 方案只是“草稿”：先渲染成卡片给用户过目，用户点“确认”才落到图形。
 """
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 # --------------------------------------------------------------------- 元件白名单
@@ -430,6 +433,11 @@ def pick_centers(pool, count: int, region: str) -> list[tuple[float, float]]:
     return _binned(candidates, count)
 
 
+# 单次能布的拉杆/自由拉杆根数上限。模型有时候会把“所有拉杆”理解成“布置几百根”，
+# 一次铺 492 根把管孔全占了（用户原话“这一堆拉杆，瞎吗”）。超过就截断并说明。
+ROD_LIMIT_PER_PLACEMENT = 40
+
+
 # ------------------------------------------------------- 参照管成对选取（挡板类）
 def _row_tolerance(values) -> float:
     """同一行管孔的 y 值会有 1e-3 级舍入差；用最小行距的一半做合并容差。"""
@@ -691,3 +699,423 @@ def groove_pairs(centers, axis: str = "y"):
         pairs.append((near_positive, near_negative))
     pairs.sort(key=lambda pair: abs(pair[0][key_index]))
     return pairs
+
+
+# ============================================================ 换热管增删方案
+# 用户一句“删除离隔板槽最近的两行换热管”同样只给意图：删哪一类位置的管、
+# 删几根/几排。具体落到哪几个真实管孔由 `TubeLayoutPage.resolve_hole_op()` 算，
+# 模型仍然拿不到、也不许给坐标。
+HOLE_OP_LABEL = {"delete": "删除换热管", "restore": "恢复换热管"}
+
+HOLE_REGIONS = {
+    "groove": "隔板槽两侧",
+    # “最外层”就是布管轮廓：每行最左、最右各一根，再加最上/最下一整排（用户口径）。
+    # 以前按半径逐层剥离，算出来的是贯穿中间的锯齿；只取每行两端又会在顶部/
+    # 底部漏掉一整排的中间几根，用户两次都在图上圈出来了。
+    "near_shell": "布管外轮廓（每行最左、最右各一根 + 最上、最下一整排）",
+    "outline": "布管外轮廓（每行最左、最右各一根 + 最上、最下一整排）",
+    "center": "最靠中心的一圈",
+    "top": "上方",
+    "bottom": "下方",
+    "left": "左侧",
+    "right": "右侧",
+    "any": "整个布管范围",
+    "selected": "当前选中的换热管",
+    "removed": "已删除的换热管孔",
+}
+
+HOLE_REGION_ALIASES = {
+    "隔板槽": "groove", "分程隔板": "groove", "槽": "groove", "groove": "groove",
+    "中间": "groove", "槽两侧": "groove",
+    "壳壁": "near_shell", "near_shell": "near_shell",
+    "最外": "outline", "外圈": "outline", "外缘": "outline", "边缘": "outline",
+    "最外层": "outline", "最外圈": "outline", "轮廓": "outline", "边界": "outline",
+    "周边": "outline", "最左最右": "outline", "每行两端": "outline", "outline": "outline",
+    "中心": "center", "圆心": "center", "center": "center",
+    "上方": "top", "顶部": "top", "top": "top",
+    "下方": "bottom", "底部": "bottom", "bottom": "bottom",
+    "左侧": "left", "左边": "left", "left": "left",
+    "右侧": "right", "右边": "right", "right": "right",
+    "全部": "any", "所有": "any", "any": "any",
+    "已删除": "removed", "删掉的": "removed", "removed": "removed",
+    "选中": "selected", "selected": "selected",
+}
+
+HOLE_OP_ALIASES = {
+    "delete": "delete", "remove": "delete", "删除": "delete", "删掉": "delete",
+    "去掉": "delete", "清除": "delete", "移除": "delete",
+    "restore": "restore", "add": "restore", "恢复": "restore", "还原": "restore",
+    "补": "restore", "布置": "restore",
+}
+
+
+def row_col_of(ref) -> tuple[int | None, int | None]:
+    """把模型给的管孔位置统一成 (行号, 列号)。
+
+    接受 {"row":19,"col":-3}、[19,-3]、(19,-3)、"行19列-3"、"19,-3" 这几种写法。
+    行号带符号（上正下负），列号带符号（左右各一套，0 是正中间）。
+    """
+    if isinstance(ref, dict):
+        row = ref.get("row", ref.get("行"))
+        col = ref.get("col", ref.get("column", ref.get("列")))
+        try:
+            return int(float(str(row).strip().lstrip("+"))), int(float(str(col).strip().lstrip("+")))
+        except (TypeError, ValueError):
+            return None, None
+    if isinstance(ref, (list, tuple)) and len(ref) >= 2:
+        try:
+            return int(ref[0]), int(ref[1])
+        except (TypeError, ValueError):
+            return None, None
+    text = str(ref or "").strip()
+    if not text:
+        return None, None
+    match = re.search(r"行\s*([+-]?\d+)\s*列\s*([+-]?\d+)", text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    numbers = re.findall(r"[+-]?\d+", text)
+    if len(numbers) >= 2:
+        return int(numbers[0]), int(numbers[1])
+    return None, None
+
+
+@dataclass
+class HoleOp:
+    """一条“换热管增删”意图：op 只认 delete / restore。
+
+    两种给法：
+    · region：只说要哪一片（隔板槽两侧/最外层/最内圈…），具体管孔由程序按内置几何规则算；
+    · tubes：模型自己看着布管图挑出来的具体管孔（行号+列号），程序只查表落地、不改口径。
+    后者才是“AI 自己判断”，region 留给离线兜底和“这确实是一句规则”的场合。
+    """
+
+    op: str = "delete"
+    region: str = "groove"
+    count: int = 0            # 0 = 这个区域里符合条件的全要
+    rows: int = 1             # region=groove：隔板槽两侧各取最近几排
+    note: str = ""
+    tubes: list = field(default_factory=list)   # [(row, col), …]，模型亲自挑的管孔
+
+    @property
+    def label(self) -> str:
+        return HOLE_OP_LABEL.get(self.op, "调整换热管")
+
+    def describe(self) -> str:
+        if self.tubes:
+            head = "、".join(f"行{r}列{c}" for r, c in self.tubes[:4])
+            more = f" 等 {len(self.tubes)} 根" if len(self.tubes) > 4 else ""
+            return f"指定管孔：{head}{more}"
+        where = HOLE_REGIONS.get(self.region, self.region)
+        if self.region == "groove":
+            where = f"隔板槽两侧最近 {self.rows} 排"
+        elif self.region in {"near_shell", "outline"}:
+            where = (
+                "布管外轮廓：每行最左、最右各 1 根，加最上、最下一整排"
+                if self.rows <= 1
+                else f"布管外轮廓：每行最左、最右各 {self.rows} 根，加最上、最下各 {self.rows} 排"
+            )
+        if self.count:
+            return f"{where}，取 {self.count} 根"
+        return where
+
+    def as_dict(self) -> dict:
+        return {
+            "op": self.op,
+            "region": self.region,
+            "count": self.count,
+            "rows": self.rows,
+            "note": self.note,
+            "tubes": [{"row": r, "col": c} for r, c in self.tubes],
+        }
+
+
+def normalize_hole_region(raw) -> str:
+    text = str(raw or "").strip()
+    if text in HOLE_REGION_ALIASES:
+        return HOLE_REGION_ALIASES[text]
+    for alias, region in sorted(
+        HOLE_REGION_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True
+    ):
+        if alias and alias in text:
+            return region
+    return "groove"
+
+
+def parse_tube_refs(raw) -> list[tuple[int, int]]:
+    """模型给的“我挑好的管孔” → [(row, col)]。
+
+    两种写法都认：
+      [{"row":19,"cols":[-3,-2,-1,1,2,3]}, {"row":18,"col":-4}, …]   ← 一行多列，最省字
+      ["行19列-3", "行18列4", …] / [[19,-3],[18,4]]
+    """
+    refs: list[tuple[int, int]] = []
+    items = raw if isinstance(raw, list) else [raw]
+    for item in items[:400]:
+        if isinstance(item, dict) and ("cols" in item or "列" in item and isinstance(item.get("列"), list)):
+            row = item.get("row", item.get("行"))
+            cols = item.get("cols", item.get("列")) or []
+            try:
+                row_value = int(float(str(row).strip().lstrip("+")))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(cols, (list, tuple)):
+                cols = [cols]
+            for col in cols:
+                try:
+                    refs.append((row_value, int(float(str(col).strip().lstrip("+")))))
+                except (TypeError, ValueError):
+                    continue
+            continue
+        row, col = row_col_of(item)
+        if row is not None and col is not None:
+            refs.append((row, col))
+    return refs
+
+
+def parse_hole_ops(raw_items) -> tuple[list[HoleOp], list[str]]:
+    """模型给的 hole_ops 数组 → 可执行方案；非法项给人话原因。"""
+    ops: list[HoleOp] = []
+    rejected: list[str] = []
+    if not isinstance(raw_items, list):
+        return ops, rejected
+    for raw in raw_items[:6]:
+        if not isinstance(raw, dict):
+            rejected.append("有一条换热管调整方案格式不对，已忽略")
+            continue
+        text = str(raw.get("op") or raw.get("action") or "delete").strip().lower()
+        op = HOLE_OP_ALIASES.get(text, HOLE_OP_ALIASES.get(str(raw.get("op") or "").strip(), "delete"))
+        try:
+            count = int(float(raw.get("count") or raw.get("quantity") or 0))
+        except (TypeError, ValueError):
+            count = 0
+        try:
+            rows = int(float(raw.get("rows") or 1))
+        except (TypeError, ValueError):
+            rows = 1
+        tubes = parse_tube_refs(
+            raw.get("tubes") or raw.get("picks") or raw.get("holes") or raw.get("管孔") or []
+        )
+        # 模型已经把管挑出来了，region 就不再参与计算（不再由程序替它解释口径）
+        region = "selected" if tubes else normalize_hole_region(raw.get("region") or raw.get("where"))
+        ops.append(
+            HoleOp(
+                op="restore" if op == "restore" else "delete",
+                region=region,
+                count=max(0, min(count, 2000)),
+                rows=max(1, min(rows, 20)),
+                note=str(raw.get("note") or "")[:120],
+                tubes=tubes,
+            )
+        )
+    return ops, rejected
+
+
+# ============================================================ 界面操作（UI 动作）
+# 用户能点的每一个按钮，Agent 都能替他按：取消全选、全选、按区域选、反选、
+# 删除选中、恢复选中、撤销、重新布管、适应窗口、切阶段、保留、导出坐标……
+# 模型只写“动作名 + 区域参数”，具体落到哪些管孔、哪个阶段仍然由程序执行。
+UI_ACTION_LABEL = {
+    "clear_selection": "取消全选（清空选中）",
+    "select_all": "选中全部换热管",
+    "select_region": "按区域选中换热管",
+    "select_tubes": "按行列号选中指定的换热管",
+    "select_removed": "选中已删除的管孔",
+    "invert_selection": "反选",
+    "delete_selected": "删除选中的换热管",
+    "restore_selected": "恢复选中的已删除管孔",
+    "delete_components": "删除选中的元件",
+    "undo": "撤销上一步",
+    "redraw": "重新布管（重算）",
+    "max_tubes": "重新布管并尽量多布",
+    "fit": "适应窗口（全屏）",
+    "zoom_in": "放大",
+    "zoom_out": "缩小",
+    "switch_stage": "切换到指定阶段",
+    "keep_stage": "保留当前阶段",
+    "dump_holes": "列出所有换热管绝对坐标",
+    "dump_components": "列出元件的坐标与数据字典（可按元件类型）",
+    "remove_components": "删除某类元件，并把占用的管孔还给换热管",
+    "convert_to_tube": "把某类元件恢复为换热管（等于删掉该元件并还孔）",
+    "set_symmetry": "开关“对称分布”",
+    "restore_all": "恢复全部已删除的管孔",
+    "clear_chat": "清空对话",
+    "start_design": "开始管束设计（读库生成草稿）",
+}
+
+UI_ACTION_ALIASES = {
+    "取消全选": "clear_selection", "清空选中": "clear_selection",
+    "取消选择": "clear_selection", "clear_selection": "clear_selection",
+    "全选": "select_all", "选中全部": "select_all", "select_all": "select_all",
+    "选择": "select_region", "按区域选": "select_region", "select": "select_region",
+    "select_region": "select_region",
+    "按行列号选": "select_tubes", "指定管孔": "select_tubes", "选这几根": "select_tubes",
+    "select_tubes": "select_tubes", "tubes": "select_tubes",
+    "选中已删除": "select_removed", "选已删除": "select_removed",
+    "select_removed": "select_removed",
+    "反选": "invert_selection", "invert": "invert_selection",
+    "invert_selection": "invert_selection",
+    "删除选中": "delete_selected", "删除选定": "delete_selected",
+    "delete_selected": "delete_selected",
+    "恢复选中": "restore_selected", "恢复选定": "restore_selected",
+    "restore_selected": "restore_selected",
+    "删除元件": "delete_components", "delete_components": "delete_components",
+    "撤销": "undo", "undo": "undo",
+    "重新布管": "redraw", "重算": "redraw", "redraw": "redraw",
+    "尽量多布": "max_tubes", "max_tubes": "max_tubes",
+    "适应窗口": "fit", "全屏": "fit", "fit": "fit",
+    "放大": "zoom_in", "zoom_in": "zoom_in",
+    "缩小": "zoom_out", "zoom_out": "zoom_out",
+    "切换阶段": "switch_stage", "打开阶段": "switch_stage",
+    "switch_stage": "switch_stage",
+    "保留": "keep_stage", "保留当前": "keep_stage", "keep": "keep_stage",
+    "keep_stage": "keep_stage",
+    "坐标": "dump_holes", "输出坐标": "dump_holes", "dump_holes": "dump_holes",
+    "元件坐标": "dump_components", "元件数据": "dump_components",
+    "元件字典": "dump_components", "数据字典": "dump_components",
+    "dump_components": "dump_components",
+    "删除元件": "remove_components", "清空元件": "remove_components",
+    "remove_components": "remove_components",
+    "恢复为换热管": "convert_to_tube", "转为换热管": "convert_to_tube",
+    "还原为换热管": "convert_to_tube", "变回换热管": "convert_to_tube",
+    "convert_to_tube": "convert_to_tube",
+    "对称分布": "set_symmetry", "set_symmetry": "set_symmetry",
+    "全部恢复": "restore_all", "恢复全部": "restore_all", "restore_all": "restore_all",
+    "清空对话": "clear_chat", "clear_chat": "clear_chat",
+    "开始设计": "start_design", "开始管束设计": "start_design",
+    "start_design": "start_design",
+}
+
+
+@dataclass
+class UIAction:
+    """一条界面操作意图：动作名 + 区域/阶段参数。
+
+    `tubes` 是模型自己挑好的管孔（行列号）。给了它，程序就按这些行列号落地，
+    不再用 region 去猜“用户说的那个区域到底是哪一片”。
+    """
+
+    name: str = "clear_selection"
+    region: str = ""
+    rows: int = 1
+    count: int = 0
+    kind: str = ""
+    stage: str = ""
+    value: str = ""
+    tubes: list = field(default_factory=list)   # [(row, col), …]
+
+    @property
+    def label(self) -> str:
+        return UI_ACTION_LABEL.get(self.name, self.name)
+
+    def describe(self) -> str:
+        text = self.label
+        if self.name == "select_tubes" and self.tubes:
+            head = "、".join(f"行{r}列{c}" for r, c in self.tubes[:3])
+            text += f"：{head}{'…' if len(self.tubes) > 3 else ''} 共 {len(self.tubes)} 根"
+            return text
+        if self.name in {"select_region", "select_removed", "delete_selected",
+                         "restore_selected"} and self.region:
+            text += f"：{HOLE_REGIONS.get(self.region, self.region)}"
+            if self.name == "select_region" and self.rows > 1:
+                text += f" {self.rows} 圈"
+        if self.name == "switch_stage" and self.stage:
+            text += f"：{self.stage}"
+        if self.name == "set_symmetry" and self.value:
+            text += f"：{self.value}"
+        return text
+
+    def as_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "region": self.region,
+            "rows": self.rows,
+            "count": self.count,
+            "kind": self.kind,
+            "stage": self.stage,
+            "value": self.value,
+            "tubes": [{"row": r, "col": c} for r, c in self.tubes],
+        }
+
+
+def normalize_ui_action(raw) -> str | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text in UI_ACTION_ALIASES:
+        return UI_ACTION_ALIASES[text]
+    if text in UI_ACTION_LABEL:
+        return text
+    for alias, name in sorted(UI_ACTION_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if alias and alias in text:
+            return name
+    return None
+
+
+def parse_ui_actions(raw_items) -> tuple[list[UIAction], list[str]]:
+    """模型给的 ui_actions 数组 → 可执行动作；认不出来的给一句人话原因。"""
+    actions: list[UIAction] = []
+    rejected: list[str] = []
+    if not isinstance(raw_items, list):
+        return actions, rejected
+    for raw in raw_items[:12]:
+        if isinstance(raw, str):
+            name = normalize_ui_action(raw)
+            if name is None:
+                rejected.append(f"不认识的操作「{raw}」")
+                continue
+            actions.append(UIAction(name=name))
+            continue
+        if not isinstance(raw, dict):
+            rejected.append("有一条界面操作格式不对，已忽略")
+            continue
+        name = normalize_ui_action(
+            raw.get("name") or raw.get("action") or raw.get("command") or raw.get("op")
+        )
+        if name is None:
+            rejected.append(f"不认识的操作「{raw.get('name') or raw.get('action')}」")
+            continue
+        try:
+            rows = int(float(raw.get("rows") or 1))
+        except (TypeError, ValueError):
+            rows = 1
+        try:
+            count = int(float(raw.get("count") or 0))
+        except (TypeError, ValueError):
+            count = 0
+        actions.append(
+            UIAction(
+                name=name,
+                region=normalize_hole_region(raw.get("region") or raw.get("where"))
+                if (raw.get("region") or raw.get("where")) else "",
+                rows=max(1, min(rows, 20)),
+                count=max(0, min(count, 2000)),
+                kind=normalize_kind(raw.get("kind")) or "",
+                stage=str(raw.get("stage") or "")[:16],
+                value=str(raw.get("value") or raw.get("on") or "")[:16],
+                tubes=parse_tube_refs(
+                    raw.get("tubes") or raw.get("picks") or raw.get("holes") or raw.get("管孔") or []
+                ),
+            )
+        )
+    return actions, rejected
+
+
+def ui_action_brief() -> str:
+    """给模型看的“界面能做的所有操作”清单（照抄就能用）。"""
+    lines = []
+    for name, label in UI_ACTION_LABEL.items():
+        extra = ""
+        if name in {"select_region", "delete_selected", "restore_selected"}:
+            extra = "；region 见换热管区域表"
+        elif name == "select_tubes":
+            extra = "；tubes 给 [{row:19,cols:[-3,-2,-1,1,2,3]},…]，你看图挑好的就是这些"
+        elif name in {"dump_components", "remove_components", "convert_to_tube"}:
+            extra = "；kind 可给元件名（拉杆/自由拉杆/中间挡管/旁路挡板/中间挡板/防冲板/滑道/吊环螺钉），空=全部"
+        elif name == "switch_stage":
+            extra = "；stage 只能是 管板型式/布管/管-板连接/轴向设计"
+        elif name == "max_tubes":
+            extra = "；count 可给目标根数"
+        elif name == "set_symmetry":
+            extra = "；value 给 开/关（或 on/off）"
+        lines.append(f"{name}（{label}{extra}）")
+    return "；".join(lines)

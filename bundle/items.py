@@ -85,6 +85,41 @@ class TubeItem(_Selectable, QGraphicsEllipseItem):
         painter.drawEllipse(self.rect())
 
 
+class GhostTubeItem(TubeItem):
+    """已删除的管孔：虚线圆圈 + 小叉，样式照正式程序在“被删除的换热管位置”
+    补画的提示圆（My_Piping.py 31410 行），既能看见删了哪儿，也能再点选它恢复。
+    """
+
+    item_kind = "tube"
+    GHOST_COLOR = QColor(214, 96, 96)
+
+    def __init__(self, center, radius, controller=None):
+        super().__init__(center, radius, controller)
+        pen = QPen(self.GHOST_COLOR)
+        pen.setWidthF(1.1)
+        pen.setStyle(Qt.DashLine)
+        self.base_pen = pen
+        self.setZValue(-0.5)
+        self.setToolTip(
+            f"已删除的换热管孔 ({self.center[0]:.2f}, {self.center[1]:.2f})，点一下可选中恢复"
+        )
+
+    def paint(self, painter, option, widget=None):  # noqa: N802 - Qt API
+        super().paint(painter, option, widget)
+        cx, cy = self.rect().center().x(), self.rect().center().y()
+        r = self.radius
+        if self.is_selected:
+            pen = QPen(SELECTED_PEN_COLOR)
+            pen.setWidthF(1.8)
+        else:
+            pen = QPen(QColor(190, 90, 90, 190))
+            pen.setWidthF(1.0)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(Qt.NoBrush))
+        painter.drawLine(QPointF(cx - r * 0.7, cy - r * 0.7), QPointF(cx + r * 0.7, cy + r * 0.7))
+        painter.drawLine(QPointF(cx - r * 0.7, cy + r * 0.7), QPointF(cx + r * 0.7, cy - r * 0.7))
+
+
 class RodItem(_Selectable, QGraphicsEllipseItem):
     """拉杆 / 自由拉杆（正式程序 red filled circle）。"""
 

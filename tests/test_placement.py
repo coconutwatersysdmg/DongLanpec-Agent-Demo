@@ -108,5 +108,95 @@ class DescribeTests(unittest.TestCase):
         self.assertIn("折流板切口方向", placement.describe_region(item))
 
 
+class HoleOpTests(unittest.TestCase):
+    """换热管增删方案：模型只给区域，坐标由界面算（这里只校验解析这一层）。"""
+
+    def test_parse_delete_with_groove_rows(self):
+        ops, rejected = placement.parse_hole_ops([
+            {"op": "delete", "region": "隔板槽两侧", "rows": 2, "count": 0},
+        ])
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(ops), 1)
+        self.assertEqual((ops[0].op, ops[0].region, ops[0].rows), ("delete", "groove", 2))
+        self.assertIn("隔板槽两侧最近 2 排", ops[0].describe())
+        self.assertEqual(ops[0].label, "删除换热管")
+
+    def test_parse_restore_and_region_fallback(self):
+        ops, _ = placement.parse_hole_ops([{"op": "恢复", "region": "最靠壳壁"}])
+        self.assertEqual(ops[0].op, "restore")
+        self.assertEqual(ops[0].region, "near_shell")
+        ops, _ = placement.parse_hole_ops([{"op": "delete", "region": "看不懂的位置"}])
+        self.assertEqual(ops[0].region, "groove")
+
+    def test_bad_items_are_rejected(self):
+        ops, rejected = placement.parse_hole_ops(["不是字典"])
+        self.assertEqual(ops, [])
+        self.assertTrue(rejected)
+
+
+class UIActionTests(unittest.TestCase):
+    """界面动作：用户能点的按钮，模型也能给同名动作（解析层单测）。"""
+
+    def test_parse_by_name_and_chinese_alias(self):
+        actions, rejected = placement.parse_ui_actions([
+            {"name": "clear_selection"},
+            {"action": "取消全选"},
+            {"name": "select_region", "region": "最外圈", "rows": 1},
+        ])
+        self.assertEqual(rejected, [])
+        self.assertEqual([a.name for a in actions],
+                         ["clear_selection", "clear_selection", "select_region"])
+        # “最外圈”= 布管外轮廓（每行两端 + 最上/最下一整排），不再是按半径剥离的一圈
+        self.assertEqual(actions[2].region, "outline")
+        self.assertIn("每行最左、最右", actions[2].describe())
+        self.assertIn("最上、最下一整排", actions[2].describe())
+
+    def test_stage_and_kind_fields(self):
+        actions, _ = placement.parse_ui_actions([
+            {"name": "switch_stage", "stage": "布管"},
+            {"name": "delete_components", "kind": "旁路挡板"},
+        ])
+        self.assertEqual(actions[0].stage, "布管")
+        self.assertEqual(actions[1].kind, "bypass")
+
+    def test_unknown_action_rejected_in_plain_words(self):
+        actions, rejected = placement.parse_ui_actions([{"name": "把图纸撕了"}])
+        self.assertEqual(actions, [])
+        self.assertTrue(rejected)
+
+    def test_brief_covers_core_buttons(self):
+        brief = placement.ui_action_brief()
+        for name in ("clear_selection", "select_all", "dump_holes", "undo",
+                     "switch_stage", "keep_stage"):
+            self.assertIn(name, brief)
+
+
+class HoleRegionTests(unittest.TestCase):
+    def test_removed_region_alias(self):
+        ops, _ = placement.parse_hole_ops([{"op": "restore", "region": "已删除"}])
+        self.assertEqual(ops[0].region, "removed")
+        self.assertIn("removed", placement.HOLE_REGIONS)
+
+
+class ComponentActionTests(unittest.TestCase):
+    """元件类操作：要拉杆就给拉杆的数据，不是换热管；删元件要把孔还回去。"""
+
+    def test_parse_element_actions(self):
+        actions, rejected = placement.parse_ui_actions([
+            {"name": "dump_components", "kind": "拉杆"},
+            {"name": "convert_to_tube", "kind": "自由拉杆"},
+            {"name": "remove_components", "kind": "旁路挡板"},
+        ])
+        self.assertEqual(rejected, [])
+        self.assertEqual([a.name for a in actions],
+                         ["dump_components", "convert_to_tube", "remove_components"])
+        self.assertEqual([a.kind for a in actions], ["rod", "free_rod", "bypass"])
+
+    def test_brief_lists_element_actions(self):
+        brief = placement.ui_action_brief()
+        for name in ("dump_components", "remove_components", "convert_to_tube"):
+            self.assertIn(name, brief)
+
+
 if __name__ == "__main__":
     unittest.main()

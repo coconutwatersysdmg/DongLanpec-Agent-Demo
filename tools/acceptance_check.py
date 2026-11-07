@@ -16,7 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from PyQt5.QtCore import QItemSelectionModel, QRectF, Qt  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QGraphicsPathItem, QLabel  # noqa: E402
+from PyQt5.QtWidgets import (  # noqa: E402
+    QApplication,
+    QGraphicsPathItem,
+    QLabel,
+    QTableWidget,
+)
 
 RESULTS: list[tuple[bool, str, str]] = []
 
@@ -1031,6 +1036,227 @@ def main() -> int:
         diagonal is not None and not error_text,
         "29.1 防冲板不再自造“两根参照管要在同一排”的限制",
         f"跨排参照管 {diagonal} 校验结果={error_text or '通过'}",
+    )
+
+    # 30. 方案卡标题行不再写“落位后删 N 个干涉管”
+    window._handle_local_command("上方布置1块平板形防冲板")
+    card = window.placement_cards[-1] if window.placement_cards else None
+    texts = [label.text() for label in card.findChildren(QLabel)] if card else []
+    check(
+        card is not None and not any("落位后删" in text for text in texts),
+        "30 元件方案卡标题行不再挂“落位后删 N 个干涉管”",
+        f"卡片上的文字：{[t for t in texts if t][:5]}",
+    )
+    if card is not None and card.discard_button.isEnabled():
+        card.discard_button.click()
+
+    # 30.1 参数弹窗标签按最长参数名撑开，长名字不再被截掉
+    long_dialog = ComponentParamDialog(
+        "折流板参数设置",
+        [ParamField("折流/支持板外径", "number", unit="mm"),
+         ParamField("折流板切口与中心线间距a", "number", unit="mm"),
+         ParamField("折流板类型", "combo", ("单弓形", "双弓形"))],
+        {"折流/支持板外径": "994", "折流板切口与中心线间距a": "284.5", "折流板类型": "单弓形"},
+    )
+    label = long_dialog._labels["折流板切口与中心线间距a"]
+    label_width = label.minimumWidth()
+    long_dialog.adjustSize()
+    needed = label.fontMetrics().horizontalAdvance("折流板切口与中心线间距a")
+    long_dialog.deleteLater()
+    check(
+        label_width > ComponentParamDialog.LABEL_WIDTH and label_width >= needed,
+        "30.1 参数弹窗标签按最长参数名撑开，长名字不再被截断",
+        f"标签宽 {label_width}px ≥ 文字宽 {needed}px（原固定 {ComponentParamDialog.LABEL_WIDTH}px）",
+    )
+
+    # 31. 勾“对称分布”时中间挡管、中间挡板也各出 2 个（源程序 judge_linkage）
+    def _place_and_count(command, kind):
+        start = len([c for c in page.components if c["kind"] == kind])
+        window._handle_local_command(command)
+        card = window.placement_cards[-1] if window.placement_cards else None
+        if card is not None and card.confirm_button.isEnabled():
+            card.confirm_button.click()
+        return len([c for c in page.components if c["kind"] == kind]) - start
+
+    tubes_added = _place_and_count("布置中间挡管", "block_tube")
+    plates_added = _place_and_count("布置中间挡板", "center_baffle")
+    check(
+        page.symmetry_on() and tubes_added == 2 and plates_added == 2,
+        "31 勾“对称分布”时中间挡管/中间挡板各补成 2 个",
+        f"对称分布={page.symmetry_on()}，挡管 {tubes_added} 个、挡板 {plates_added} 个",
+    )
+
+    # 32. 旁路挡板外边缘贴着折流/支持板外径圆，四角都不超出大圆
+    window._handle_local_command("布置旁路挡板")
+    card = window.placement_cards[-1] if window.placement_cards else None
+    if card is not None and card.confirm_button.isEnabled():
+        card.confirm_button.click()
+    plates = [c for c in page.components if c["kind"] == "bypass"][-4:]
+    radius = page.result.baffle_r
+    worst = 0.0
+    for plate in plates:
+        cx, cy = plate["center"]
+        half_w, half_h = plate["size"][0] / 2.0, plate["size"][1] / 2.0
+        for dx, dy in ((-half_w, -half_h), (half_w, -half_h), (-half_w, half_h), (half_w, half_h)):
+            worst = max(worst, math.hypot(cx + dx, cy + dy))
+    check(
+        len(plates) == 4 and worst <= radius + 0.5,
+        "32 旁路挡板宽度按“圆边 − 孔桥 − do/2”算，板整体落在折流板外径圆内",
+        f"4 块板最远角 R={worst:.2f} ≤ 折流板半径 {radius:.2f}",
+    )
+
+    # 33. 对话里删/补换热管：先生成方案卡，确认后才改图
+    holes_before = len(page.current_centers())
+    window._handle_local_command("删除离隔板槽最近的两行换热管")
+    hole_card = window.hole_cards[-1] if window.hole_cards else None
+    pending_ok = bool(hole_card) and hole_card.confirm_button.isEnabled()
+    untouched = len(page.current_centers()) == holes_before
+    if pending_ok:
+        hole_card.confirm_button.click()
+    holes_after = len(page.current_centers())
+    window._handle_local_command("恢复刚才删除的换热管")
+    restore_card = window.hole_cards[-1] if window.hole_cards else None
+    if restore_card is not None:
+        restore_card.confirm_button.click()
+    holes_restored = len(page.current_centers())
+    check(
+        pending_ok and untouched and holes_after < holes_before and holes_restored == holes_before,
+        "33 “删除离隔板槽最近的两排换热管”由程序算管孔，确认后删、可再恢复",
+        f"方案卡待确认={pending_ok}，管孔 {holes_before}→{holes_after}→{holes_restored}",
+    )
+
+    # 34. 初始对话只留两句，底部提示行与库状态行都删掉
+    greeting = window.chat_history[0]["content"] if window.chat_history else ""
+    hint_gone = window.findChild(QLabel, "shortcutHint") is None
+    db_gone = not hasattr(window, "db_label")
+    check(
+        greeting.count("\n") == 1 and "四个阶段" not in greeting and hint_gone and db_gone,
+        "34 初始对话只留两句，快捷键提示行与“正式库：…”状态行已去掉",
+        f"欢迎语={greeting!r}，提示行已删={hint_gone}，库状态行已删={db_gone}",
+    )
+
+    # 35. “最外层”= 布管轮廓：每行两端 + 最上/最下一整排（不是贯穿中间的锯齿）
+    from bundle.placement import UIAction, group_lines
+
+    page.clear_selection()
+    window._run_ui_actions([UIAction(name="select_region", region="near_shell", rows=1)])
+    outer_selected = list(page.selected)
+    total_holes = len(page.current_centers())
+    picked_keys = {(round(float(c[0]), 6), round(float(c[1]), 6)) for c in outer_selected}
+    rows_all = group_lines(page.current_centers(), "row")
+    cap_rows = {0, len(rows_all) - 1}            # 最上一排、最下一排
+    cap_keys: set[tuple[float, float]] = set()
+    for index in cap_rows:
+        for point in rows_all[index]:
+            cap_keys.add((round(float(point[0]), 6), round(float(point[1]), 6)))
+    line_count = 0
+    edge_ok = bool(picked_keys) and cap_keys <= picked_keys
+    for index, line in enumerate(rows_all):
+        ordered = sorted(line, key=lambda c: c[0])
+        line_count += 1
+        keys = [(round(float(c[0]), 6), round(float(c[1]), 6)) for c in ordered]
+        if not {keys[0], keys[-1]} <= picked_keys:
+            edge_ok = False                          # 每行两端都得在里面
+            break
+        if index in cap_rows:                        # 最上/最下一整排：整排都得选中
+            if not set(keys) <= picked_keys:
+                edge_ok = False
+                break
+        elif any(key in picked_keys for key in keys[1:-1]):
+            edge_ok = False                          # 中间各排只许取两端
+            break
+    check(
+        edge_ok and 0 < len(outer_selected) < total_holes / 3,
+        "35 “最外层”= 每行最左、最右各一根，且最上、最下一整排全取",
+        f"选中 {len(outer_selected)}/{total_holes} 个，覆盖 {line_count} 行，"
+        f"顶/底排共 {len(cap_keys)} 根",
+    )
+
+    # 36. 已删除管孔留痕：图上虚线可点选，行列号不再是 0
+    window._handle_local_command("删除最外一圈的换热管")
+    if window.hole_cards:
+        window.hole_cards[-1].confirm_button.click()
+    ghosts = list(page._ghost_items)
+    ghost_refs = [page._tube_ref(c) for c in ghosts[:4]]
+    ghost_ok = bool(ghosts) and all(ref["row"] != 0 or ref["col"] != 0 for ref in ghost_refs)
+    page.select_centers(ghosts[:2])
+    ghost_selected = sum(1 for item in page._ghost_items.values() if item.is_selected)
+    page.clear_selection()
+    check(
+        ghost_ok and ghost_selected == min(2, len(ghosts)) and len(ghosts) < total_holes,
+        "36 删掉的管孔在图上留虚线小叉、可点选，方案卡不再显示“行0列0”",
+        f"虚线管孔 {len(ghosts)} 个，示例 {ghost_refs[0] if ghost_refs else None}，点选中 {ghost_selected} 个",
+    )
+
+    # 37. 界面动作：取消全选 / 列出坐标 都能执行（模型给 ui_actions 走同一条路）
+    window._run_ui_actions([UIAction(name="select_all")])
+    selected_all = len(page.selected)
+    notes = window._run_ui_actions([UIAction(name="clear_selection")])
+    cleared = len(page.selected) == 0
+    coords_before = len(window.conversation.findChildren(QTableWidget))
+    window._run_ui_actions([UIAction(name="dump_holes")])
+    coords_after = len(window.conversation.findChildren(QTableWidget))
+    check(
+        selected_all > 0 and cleared and coords_after == coords_before + 1,
+        "37 “取消全选”“列出所有换热管坐标”这类界面操作 Agent 都能执行",
+        f"全选 {selected_all} 个→取消后 {len(page.selected)} 个；坐标表卡 {coords_before}→{coords_after}",
+    )
+
+    # 38. 提示词不再把 Agent 封死（去掉“严禁输出坐标”等限制，补上 ui_actions 清单）
+    prompt_text = (ROOT / "ai_support" / "api_client.py").read_text(encoding="utf-8")
+    check(
+        "严禁输出管孔坐标" not in prompt_text
+        and "ui_action_brief()" in prompt_text
+        and "不要以" in prompt_text,
+        "38 提示词改成“界面上的事都能做”，并给出 ui_actions 动作清单",
+        "已去掉“严禁输出坐标/这不是我的范围”这类自我限制",
+    )
+
+    # 39. 元件有自己的数据字典：要拉杆就只给拉杆（不再拿换热管表顶替）
+    page.remove_components("rod")
+    page.remove_components("free_rod")
+    window._handle_local_command("布置拉杆")
+    if window.placement_cards:
+        window.placement_cards[-1].confirm_button.click()
+    rod_data = page.component_coordinates("rod")
+    rod_rows = rod_data["rows"]
+    check(
+        bool(rod_rows) and rod_data["label"] == "拉杆"
+        and all(r["name"] == "拉杆" for r in rod_rows)
+        and all(r.get("row") not in ("", None) for r in rod_rows)
+        and all("φ" in r["spec"] for r in rod_rows),
+        "39 每个元件有自己的数据字典——要拉杆就给拉杆（形式/直径/行列号/坐标）",
+        f"拉杆 {len(rod_rows)} 根，示例 {rod_rows[0] if rod_rows else None}",
+    )
+    window._handle_local_command("输出所有拉杆坐标")
+    last_chat = window.chat_history[-1]["content"] if window.chat_history else ""
+    check(
+        "已列出拉杆" in last_chat and "换热管" not in last_chat,
+        "39.1 “输出所有拉杆坐标”给的是拉杆表，不再是换热管表",
+        last_chat[:80],
+    )
+
+    # 40. “把所有拉杆恢复为换热管”：删元件 + 把占的管孔还给换热管
+    holes_before_conv = len(page.current_centers())
+    rods_before_conv = len([c for c in page.components if c["kind"] == "rod"])
+    window._handle_local_command("将所有拉杆恢复为换热管")
+    holes_after_conv = len(page.current_centers())
+    check(
+        rods_before_conv > 0
+        and holes_after_conv == holes_before_conv + rods_before_conv
+        and not any(c["kind"] == "rod" for c in page.components),
+        "40 “将所有拉杆恢复为换热管”真的删掉拉杆并把管孔还回来",
+        f"拉杆 {rods_before_conv}→0，管孔 {holes_before_conv}→{holes_after_conv}",
+    )
+
+    # 41. 拉杆单次数量上限：模型把“所有拉杆”当成布置几百根时兜住
+    from bundle.placement import PlacementItem, ROD_LIMIT_PER_PLACEMENT
+
+    huge = page._resolve_item(PlacementItem("rod", 492, "any", {}))
+    check(
+        len(huge["tubes"]) <= ROD_LIMIT_PER_PLACEMENT + 4,
+        "41 单次拉杆数量有上限，不会一次铺满整张图",
+        f"要求 492 根 → 实际解析 {len(huge['tubes'])} 根（上限 {ROD_LIMIT_PER_PLACEMENT}）",
     )
 
     # 20. 前序修改 → 下游失效

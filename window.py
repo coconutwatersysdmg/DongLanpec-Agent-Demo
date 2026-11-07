@@ -44,12 +44,32 @@ from PyQt5.QtWidgets import (
 from ai_support.api_client import CANONICAL_FIELDS, FIELD_ALIASES, DeepSeekClient
 from bundle.page import COMPONENT_LABEL, TubeLayoutPage
 from bundle.placement import (
+    HOLE_REGIONS,
     KIND_LABEL,
     OPTION_FIELDS,
+    HoleOp,
     PlacementItem,
+    UIAction,
     normalize_kind,
     normalize_region,
+    parse_hole_ops,
+    parse_ui_actions,
 )
+
+
+def is_immediate_local_control(text: str) -> bool:
+    """只有无需模型理解的确认/回退指令才允许在 Agent 前本地执行。"""
+    compact = re.sub(r"\s+", "", str(text or ""))
+    exact = {
+        "撤销", "撤回", "保留", "保留当前方案", "确认保留",
+        "确认布置", "确认方案", "执行方案", "按这个布置", "就按这个布置",
+        "放弃方案", "取消方案", "不布置了", "使用推荐值", "采用推荐值",
+    }
+    return (
+        compact in exact
+        or compact.startswith("保留当前")
+        or ("为什么" in compact and "不通过" in compact)
+    )
 from bundle.stages import AxialStage, SheetFormStage, TubeConnectionStage
 from bundle.widgets import RightAlignedComboBox
 from db.production import DatabaseUnavailable, ProductionRepository, SaveFailed
@@ -835,6 +855,296 @@ class PlacementPlanCard(QFrame):
         self.layout().insertWidget(self.layout().count() - 1, done)
 
 
+class HolePlanCard(QFrame):
+    """换热管增删方案卡（“删除离隔板槽最近的 2 排换热管”这类要求）。
+
+    和元件方案卡一样：AI 只给“删哪一片、几根”，真正落到哪些管孔由程序按当前
+    布管结果算，卡片上把算出来的管孔列给用户，点“确认执行”才动图。
+    """
+
+    confirm_requested = pyqtSignal(object)
+    discard_requested = pyqtSignal(object)
+
+    def __init__(self, ops, preview: dict, page=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("planCard")
+        self.ops = list(ops)
+        self._page = page
+        self._preview = preview or {}
+        self.setMaximumWidth(ChatTranscript.MAX_TEXT_WIDTH + 34)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(7)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel("布管 · 换热管调整方案")
+        title.setObjectName("planTitle")
+        head.addWidget(title)
+        self.badge = QLabel("待确认")
+        self.badge.setObjectName("statusBadge")
+        head.addWidget(self.badge)
+        head.addStretch()
+        root.addLayout(head)
+
+        body = QFrame()
+        body.setObjectName("planTable")
+        box = QVBoxLayout(body)
+        box.setContentsMargins(12, 8, 12, 8)
+        box.setSpacing(6)
+        for row in self._preview.get("rows", []):
+            line = QHBoxLayout()
+            line.setSpacing(8)
+            name = QLabel(str(row.get("label", "调整换热管")))
+            name.setObjectName("planCellStrong")
+            line.addWidget(name)
+            amount = QLabel(f"× {row.get('count', 0)}")
+            amount.setObjectName("planCellMuted")
+            line.addWidget(amount)
+            where = QLabel(str(row.get("where", "")))
+            where.setObjectName("planCellMuted")
+            line.addWidget(where)
+            line.addStretch()
+            box.addLayout(line)
+            refs = "、".join(
+                f"行{ref.get('row')}列{ref.get('col')}" for ref in row.get("refs") or []
+            )
+            if row.get("more"):
+                refs += f" 等（另有 {row['more']} 根）"
+            detail = QLabel(refs or "这个范围内没有可调整的换热管")
+            detail.setObjectName("planCellMuted")
+            detail.setWordWrap(True)
+            box.addWidget(detail)
+        problems = list(self._preview.get("problems") or [])
+        if problems:
+            shown = "；".join(problems[:6])
+            if len(problems) > 6:
+                shown += f" 等 {len(problems)} 处"
+            warn = QLabel(f"没落上的：{shown}")
+            warn.setObjectName("planFailedBadge")
+            warn.setWordWrap(True)
+            box.addWidget(warn)
+        root.addWidget(body)
+
+        self.actions = QHBoxLayout()
+        self.actions.setSpacing(8)
+        self.hint = QLabel("")
+        self.hint.setObjectName("planHint")
+        self.hint.setWordWrap(True)
+        self.actions.addWidget(self.hint, 1)
+        self.discard_button = QPushButton("放弃")
+        self.discard_button.setObjectName("planGhost")
+        self.discard_button.setCursor(Qt.PointingHandCursor)
+        self.confirm_button = QPushButton("确认执行")
+        self.confirm_button.setObjectName("planPrimary")
+        self.confirm_button.setCursor(Qt.PointingHandCursor)
+        self.discard_button.clicked.connect(lambda: self.discard_requested.emit(self))
+        self.confirm_button.clicked.connect(lambda: self.confirm_requested.emit(self))
+        self.actions.addWidget(self.discard_button)
+        self.actions.addWidget(self.confirm_button)
+        root.addLayout(self.actions)
+
+        self._refresh_hint()
+
+    def _refresh_hint(self) -> None:
+        holes = int(self._preview.get("holes", 0))
+        remaining = int(self._preview.get("remaining", holes))
+        total = int(self._preview.get("total", 0))
+        delete = sum(row["count"] for row in self._preview.get("rows", []) if row["op"] == "delete")
+        restore = total - delete
+        parts = []
+        if delete:
+            parts.append(f"删除 {delete} 根")
+        if restore:
+            parts.append(f"恢复 {restore} 根")
+        text = f"确认后按卡片执行：{'、'.join(parts) or '没有改动'}（当前 {holes} 孔）"
+        if total:
+            text += f"，执行后 {remaining} 孔。"
+        self.hint.setText(text)
+        self.confirm_button.setEnabled(total > 0)
+
+    def mark_applied(self, result: dict) -> None:
+        ok = bool(result.get("ok"))
+        self.badge.setText("已执行" if ok else "未能执行")
+        self.badge.setObjectName("keptBadge" if ok else "planFailedBadge")
+        style = self.badge.style()
+        style.unpolish(self.badge)
+        style.polish(self.badge)
+        for button in (self.confirm_button, self.discard_button):
+            button.setEnabled(False)
+            button.hide()
+        lines = [
+            f"{row['label']} {row['changed']} 根（{row['where']}）"
+            for row in result.get("rows", [])
+        ]
+        if ok:
+            text = (
+                f"已执行：{'；'.join(lines)}。当前 {result.get('holes_after', 0)} 个换热管孔。"
+            )
+        else:
+            text = result.get("message") or "没有可调整的换热管，布管图未变。"
+        done = QLabel(text)
+        done.setObjectName("planResult" if ok else "planResultMuted")
+        done.setWordWrap(True)
+        self.layout().insertWidget(self.layout().count() - 1, done)
+
+    def mark_discarded(self) -> None:
+        self.badge.setText("已放弃")
+        self.badge.setObjectName("planMutedBadge")
+        style = self.badge.style()
+        style.unpolish(self.badge)
+        style.polish(self.badge)
+        for button in (self.confirm_button, self.discard_button):
+            button.setEnabled(False)
+            button.hide()
+        done = QLabel("方案已放弃，布管图没有改动。")
+        done.setObjectName("planResultMuted")
+        done.setWordWrap(True)
+        self.layout().insertWidget(self.layout().count() - 1, done)
+
+
+class HoleCoordinateCard(QFrame):
+    """换热管坐标表：把“所有换热管的绝对坐标”摊在对话里，可一键复制成表格。
+
+    坐标不是模型编的，是程序从真实布管结果里取的（行号/列号按满布管孔编号）。
+    """
+
+    def __init__(self, rows: list[dict], title: str = "换热管坐标（绝对坐标）", parent=None):
+        super().__init__(parent)
+        self.setObjectName("planCard")
+        self.setMaximumWidth(ChatTranscript.MAX_TEXT_WIDTH + 34)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._rows = list(rows)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(7)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        label = QLabel(f"{title} · 共 {len(self._rows)} 个")
+        label.setObjectName("planTitle")
+        head.addWidget(label)
+        head.addStretch()
+        self.copy_button = QPushButton("复制全部")
+        self.copy_button.setObjectName("planGhost")
+        self.copy_button.setCursor(Qt.PointingHandCursor)
+        self.copy_button.clicked.connect(self._copy_all)
+        head.addWidget(self.copy_button)
+        root.addLayout(head)
+
+        table = QTableWidget(len(self._rows), 5)
+        table.setHorizontalHeaderLabels(["行号", "列号", "X (mm)", "Y (mm)", "状态"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setMaximumHeight(240)
+        table.horizontalHeader().setStretchLastSection(True)
+        for index, row in enumerate(self._rows):
+            values = [
+                str(row.get("row", "")), str(row.get("col", "")),
+                f"{float(row.get('x', 0)):.2f}", f"{float(row.get('y', 0)):.2f}",
+                str(row.get("state", "")),
+            ]
+            for column, text in enumerate(values):
+                table.setItem(index, column, QTableWidgetItem(text))
+        table.resizeColumnsToContents()
+        for column, width in ((0, 56), (1, 56), (2, 88), (3, 88)):
+            table.setColumnWidth(column, width)
+        root.addWidget(table)
+        self.table = table
+
+    def _copy_all(self) -> None:
+        lines = ["行号\t列号\tX\tY\t状态"]
+        for row in self._rows:
+            lines.append(
+                f"{row.get('row')}\t{row.get('col')}\t"
+                f"{float(row.get('x', 0)):.2f}\t{float(row.get('y', 0)):.2f}\t{row.get('state', '')}"
+            )
+        QApplication.clipboard().setText("\n".join(lines))
+        self.copy_button.setText("已复制")
+
+
+class ComponentCoordinateCard(QFrame):
+    """元件数据字典表：说“输出所有拉杆坐标”就给拉杆，不再拿换热管糊弄。
+
+    列是“元件 / 规格·形式 / 落位（行号列号）/ X / Y / 备注”，数据全部来自
+    图上真实布置的元件（`page.component_coordinates`），模型编不出来。
+    """
+
+    def __init__(self, data: dict, parent=None):
+        super().__init__(parent)
+        self.setObjectName("planCard")
+        self.setMaximumWidth(ChatTranscript.MAX_TEXT_WIDTH + 34)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._rows = list(data.get("rows") or [])
+        self.label = str(data.get("label") or "全部元件")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 10, 16, 10)
+        root.setSpacing(7)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel(f"{self.label}数据（绝对坐标） · 共 {len(self._rows)} 个")
+        title.setObjectName("planTitle")
+        head.addWidget(title)
+        head.addStretch()
+        self.copy_button = QPushButton("复制全部")
+        self.copy_button.setObjectName("planGhost")
+        self.copy_button.setCursor(Qt.PointingHandCursor)
+        self.copy_button.clicked.connect(self._copy_all)
+        head.addWidget(self.copy_button)
+        root.addLayout(head)
+
+        table = QTableWidget(len(self._rows), 5)
+        table.setHorizontalHeaderLabels(["元件", "规格 / 形式", "落位", "X (mm)", "Y (mm)"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # 表高按行数给足，别让最后一行被自己的滚动条挡住
+        row_height = 46
+        table.setFixedHeight(min(300, row_height * (len(self._rows) + 1) + 12))
+        table.setWordWrap(False)
+        # 固定列宽，最后一列不再被拉伸（否则 Y 列会吃掉半个卡片、把规格挤成省略号）
+        table.horizontalHeader().setStretchLastSection(False)
+        for index, row in enumerate(self._rows):
+            where = ""
+            if row.get("row") not in ("", None):
+                where = f"行{row.get('row')} 列{row.get('col')}"
+            values = [
+                str(row.get("name", "")),
+                str(row.get("spec", "")),
+                where,
+                f"{float(row.get('x', 0)):.2f}",
+                f"{float(row.get('y', 0)):.2f}",
+            ]
+            for column, text in enumerate(values):
+                cell = QTableWidgetItem(text)
+                cell.setToolTip(text)
+                table.setItem(index, column, cell)
+        # 列宽合计 ~560，正好落在聊天区宽度内（再宽右侧会被裁掉）
+        for column, width in ((0, 84), (1, 176), (2, 116), (3, 92), (4, 92)):
+            table.setColumnWidth(column, width)
+        root.addWidget(table)
+        self.table = table
+
+    def _copy_all(self) -> None:
+        lines = ["元件\t规格/形式\t落位\tX\tY"]
+        for row in self._rows:
+            where = ""
+            if row.get("row") not in ("", None):
+                where = f"行{row.get('row')}列{row.get('col')}"
+            lines.append(
+                f"{row.get('name')}\t{row.get('spec')}\t{where}\t"
+                f"{float(row.get('x', 0)):.2f}\t{float(row.get('y', 0)):.2f}"
+            )
+        QApplication.clipboard().setText("\n".join(lines))
+        self.copy_button.setText("已复制")
+
+
 class DesignWindow(QMainWindow):
     def __init__(self, repository=None):
         super().__init__()
@@ -850,6 +1160,7 @@ class DesignWindow(QMainWindow):
         self._worker_cancelled = False
         self.chat_history: list[dict] = []
         self.placement_cards: list[PlacementPlanCard] = []
+        self.hole_cards: list[HolePlanCard] = []
         self._last_user_text = ""
         self.db_status = "未连接"
         # 离屏截图/自动验收用：跳过模态弹窗，并且绝不真正写库
@@ -874,9 +1185,7 @@ class DesignWindow(QMainWindow):
         self.append_chat(
             "assistant",
             "你好，我是管束设计助手。\n"
-            "点击左侧“开始管束设计”，我会读取正式数据库里前序模块的数据，按"
-            "“管板型式 → 布管 → 管-板连接 → 轴向设计”四个阶段生成草稿。\n"
-            "布管图形和右侧管孔数量表都可以直接操作；四个阶段都保留后才写库。",
+            "点击左侧“开始管束设计”。",
         )
 
     def _apply_default_split(self) -> None:
@@ -950,10 +1259,6 @@ class DesignWindow(QMainWindow):
         self.model_label = QLabel("")
         self.model_label.setObjectName("footerLabel")
         sidebar_layout.addWidget(self.model_label)
-        self.db_label = QLabel("")
-        self.db_label.setObjectName("footerLabel")
-        self.db_label.setWordWrap(True)
-        sidebar_layout.addWidget(self.db_label)
         self._refresh_model_label()
         root_layout.addWidget(self.sidebar)
 
@@ -1024,10 +1329,6 @@ class DesignWindow(QMainWindow):
         self.send_button.clicked.connect(self.send_note)
         composer_layout.addWidget(self.send_button, 0, Qt.AlignBottom)
         wrap_layout.addWidget(composer)
-        hint = QLabel("Enter 发送 · Shift+Enter 换行 · 点换热管/普通拉杆可多选（再点取消）· 右键清空选中 · Ctrl+滚轮缩放")
-        hint.setObjectName("shortcutHint")
-        hint.setAlignment(Qt.AlignCenter)
-        wrap_layout.addWidget(hint)
         main_layout.addWidget(composer_wrap)
         root_layout.addWidget(self.main_panel, 1)
 
@@ -1045,9 +1346,7 @@ class DesignWindow(QMainWindow):
         except DatabaseUnavailable as exc:
             ok, message = False, str(exc)
         self.db_status = message
-        if hasattr(self, "db_label"):
-            self.db_label.setText(("正式库：" if ok else "正式库不可用：") + message)
-            self.db_label.setStyleSheet("color:#8f949c;font-size:8.5pt;" if ok else "color:#b04a42;font-size:8.5pt;")
+        self.db_ready = ok
 
     def _apply_style(self):
         self.setStyleSheet("""
@@ -1095,7 +1394,6 @@ class DesignWindow(QMainWindow):
         #planCellCombo:hover { border-color:#c9d8ea; }
         #planLockedValue { color:#4a4f57; font-size:9.5pt; font-weight:600; }
         #planHint { color:#8f949c; font-size:9pt; }
-        #planDeleteNote { color:#b45309; font-size:8.5pt; }
         #planResult { color:#256b3a; font-size:10pt; }
         #planResultMuted { color:#8f949c; font-size:9.5pt; }
         #planPrimary { background:#2f6fe4; color:#ffffff; border:none; border-radius:9px; padding:8px 18px; font-weight:600; }
@@ -1565,9 +1863,11 @@ class DesignWindow(QMainWindow):
         if self.session is None:
             self.append_chat("assistant", "请先点击左侧“开始管束设计”，读取数据库并生成草稿后才能修改。")
             return
-        if self._handle_local_command(text):
-            return
         if self.config.configured:
+            # 配置模型后，开放式要求必须交给 Agent 结合当前图形选择工具；
+            # 只有“确认/放弃/保留”等无需理解的控制命令立即本地执行。
+            if is_immediate_local_control(text) and self._handle_local_command(text):
+                return
             client = DeepSeekClient(self.config)
             # 状态提示（已选中第 N 行……）不进入模型上下文，避免占满 token
             history = [
@@ -1584,10 +1884,13 @@ class DesignWindow(QMainWindow):
                 self._handle_ai_result,
             )
             return
+        if self._handle_local_command(text):
+            return
         self.append_chat(
             "assistant",
             "离线模式只识别明确的操作（例如“换热管中心距改成34毫米”“重新布管，尽量多布”"
-            "“外围对称布置8根拉杆”“保留当前方案”“把刚才的修改撤销”）。"
+            "“外围对称布置8根拉杆”“删除离隔板槽最近的两排换热管”“恢复刚才删除的换热管”"
+            "“保留当前方案”“把刚才的修改撤销”）。"
             "如需自由问答，请在 AI 设置中填写 DeepSeek API Key。",
         )
 
@@ -1614,6 +1917,8 @@ class DesignWindow(QMainWindow):
             "placed_components": counts,
             "product_type": page.product_type,
             "current_values": values,
+            # 给 Agent 看真实布管字符图；模型据此选行列号，程序再查表和校验。
+            "plan_view": page.plan_view_text(),
         }
 
     def _ai_context(self) -> dict:
@@ -1667,7 +1972,11 @@ class DesignWindow(QMainWindow):
             if pending:
                 self._confirm_placement(pending[-1])
             else:
-                self.append_chat("assistant", "当前没有待确认的布置方案。")
+                holes = [card for card in self.hole_cards if card.badge.text() == "待确认"]
+                if holes:
+                    self._confirm_hole_card(holes[-1])
+                else:
+                    self.append_chat("assistant", "当前没有待确认的布置方案。")
             return True
 
         if compact in {"放弃方案", "取消方案", "不布置了"}:
@@ -1675,7 +1984,11 @@ class DesignWindow(QMainWindow):
             if pending:
                 self._discard_placement(pending[-1])
             else:
-                self.append_chat("assistant", "当前没有待确认的布置方案。")
+                holes = [card for card in self.hole_cards if card.badge.text() == "待确认"]
+                if holes:
+                    self._discard_hole_card(holes[-1])
+                else:
+                    self.append_chat("assistant", "当前没有待确认的布置方案。")
             return True
 
         if "使用推荐值" in compact or "采用推荐" in compact:
@@ -1686,6 +1999,12 @@ class DesignWindow(QMainWindow):
                     self.append_chat("assistant", f"已采用推荐值：{issue['field']} = {issue['recommended']}。")
                     return True
             self.append_chat("assistant", "当前没有问题项需要采用推荐值。")
+            return True
+
+        ui_action = self._parse_ui_words(compact)
+        if ui_action is not None:
+            notes = self._run_ui_actions([ui_action])
+            self.append_chat("assistant", "\n".join(notes) or "已执行。")
             return True
 
         if isinstance(layout_page, TubeLayoutPage):
@@ -1704,6 +2023,16 @@ class DesignWindow(QMainWindow):
                     )
                 else:
                     self.append_chat("assistant", outcome.get("message", "布管未成功。"))
+                return True
+
+            hole_op = self._parse_hole_words(compact)
+            if hole_op is not None:
+                self.append_chat(
+                    "assistant",
+                    f"我按“{hole_op.label}｜{hole_op.describe()}”算了一版方案，"
+                    "请先过目；确认后直接在布管图上执行。",
+                )
+                self._show_hole_card([hole_op])
                 return True
 
             item = self._parse_placement_words(compact)
@@ -1743,6 +2072,62 @@ class DesignWindow(QMainWindow):
         ("拉杆", "rod"),
     )
     _PLACEMENT_VERBS = ("布置", "摆放", "摆", "放", "增加", "加", "均布", "设置", "安装", "来")
+
+    # 离线也能删/补换热管：“删除离隔板槽最近的两行换热管”直接算成方案
+    _CN_NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+                   "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+    def _parse_hole_words(self, compact: str) -> HoleOp | None:
+        """把自然语言里的“删/补换热管”解析成 HoleOp（只给区域，坐标由程序算）。"""
+        if not any(word in compact for word in ("换热管", "管孔", "管子")):
+            return None
+        # “把拉杆恢复为换热管”里的“换热管”是目标类型，不是要增删换热管
+        if self._kind_from_text(compact) and any(
+            word in compact
+            for word in ("恢复为换热管", "转为换热管", "还原为换热管", "变回换热管", "改回换热管")
+        ):
+            return None
+        if any(word in compact for word in ("怎么", "如何", "为什么", "吗", "？", "?")):
+            return None
+        restore = any(word in compact for word in ("恢复", "还原", "补回", "补上", "加回"))
+        delete = any(word in compact for word in ("删除", "删掉", "去掉", "清除", "移除", "删"))
+        if not (restore or delete):
+            return None
+        # “恢复刚才删除的换热管”里也有“删除”二字，恢复优先
+        op = "restore" if restore else "delete"
+
+        region = ""
+        if "隔板槽" in compact or "分程隔板" in compact or "槽" in compact:
+            region = "groove"
+        elif "壳壁" in compact or "最外" in compact or "外圈" in compact or "外缘" in compact:
+            region = "near_shell"
+        elif "中心" in compact or "圆心" in compact:
+            region = "center"
+        elif "上方" in compact or "顶部" in compact or "顶上" in compact:
+            region = "top"
+        elif "下方" in compact or "底部" in compact:
+            region = "bottom"
+        elif "左侧" in compact or "左边" in compact:
+            region = "left"
+        elif "右侧" in compact or "右边" in compact:
+            region = "right"
+        elif "选中" in compact:
+            region = "selected"
+        if not region:
+            # 没指定位置：恢复就是把删掉的都还原，删除默认从隔板槽两侧起
+            region = "any" if op == "restore" else "groove"
+
+        rows = 1
+        match = re.search(r"([0-9]+|[一二两三四五六七八九十])\s*(?:排|行|列|圈)", compact)
+        if match:
+            token = match.group(1)
+            rows = int(token) if token.isdigit() else self._CN_NUMBERS.get(token, 1)
+
+        count = 0
+        match = re.search(r"([0-9]+)\s*(?:根|个|孔)", compact)
+        if match:
+            count = int(match.group(1))
+        return HoleOp(op=op, region=region, count=count, rows=max(1, rows))
 
     def _parse_placement_words(self, compact: str) -> PlacementItem | None:
         # 纯咨询（“拉杆一般怎么布置？”）不生成方案，避免把提问当成指令
@@ -1938,19 +2323,34 @@ class DesignWindow(QMainWindow):
                 ))
             except (TypeError, ValueError):
                 continue
-        if not items and not applied:
-            # 模型没给出方案时兜底：用户确实在要求布置元件，就按本地规则补一版方案卡
-            fallback = self._parse_placement_words(re.sub(r"\s+", "", self._last_user_text or ""))
-            if fallback is not None:
-                items.append(fallback)
-                lines.append("\n模型没有给出结构化布置项，我按常规规则补了一版方案，请确认。")
         if items:
             lines.append("\n方案已生成，图上已高亮选中的换热管，确认后布置。")
         if placement_rejected:
             lines.append("\n方案中未采纳的部分：")
             lines.extend(f"• {item}" for item in placement_rejected)
 
+        # 换热管增删：模型只给“哪一片、几根”，管孔由程序按当前布管结果算
+        hole_ops, parsed_hole_rejected = parse_hole_ops(result.get("hole_ops", []) or [])
+        hole_rejected = list(result.get("hole_rejected") or []) + parsed_hole_rejected
+        if hole_ops:
+            lines.append("\n换热管调整方案已生成，图上已圈出要处理的管孔，确认后执行。")
+        if hole_rejected:
+            lines.append("\n换热管调整未采纳的部分：")
+            lines.extend(f"• {item}" for item in hole_rejected)
+
+        # 界面操作：用户能点的按钮，模型同样可以让我点（清空选中、全选、切阶段…）
+        ui_actions, ui_rejected = parse_ui_actions(result.get("ui_actions", []))
+        ui_notes = self._run_ui_actions(ui_actions) if ui_actions else []
+        if ui_notes:
+            lines.append("\n界面操作：")
+            lines.extend(f"• {item}" for item in ui_notes)
+        if ui_rejected:
+            lines.append("\n界面操作未采纳的部分：")
+            lines.extend(f"• {item}" for item in ui_rejected)
+
         self.append_chat("assistant", "\n".join(lines))
+        if hole_ops:
+            self._show_hole_card(hole_ops)
         if items:
             self._show_placement_card(items)
 
@@ -2007,6 +2407,330 @@ class DesignWindow(QMainWindow):
             # 方案作废，把图上高亮的参照管也取消掉
             page.select_centers([])
         self.notify("已放弃这版布置方案，布管图没有改动")
+
+    # ---------------- 换热管增删方案（先过目，再执行）----------------
+    def _show_hole_card(self, ops) -> None:
+        page = self.pages.get(1)
+        if not isinstance(page, TubeLayoutPage):
+            if self.session is None or not self.session.approved[0]:
+                self.append_chat(
+                    "assistant",
+                    "换热管增删需要布管页：请先保留“管板型式”，进入“布管”后再确认。",
+                )
+                return
+            page = self._ensure_page(1)
+        preview = page.preview_hole_ops(ops)
+        card = HolePlanCard(ops, preview, page=page)
+        card.confirm_requested.connect(self._confirm_hole_card)
+        card.discard_requested.connect(self._discard_hole_card)
+        self.hole_cards.append(card)
+        self.conversation.append_widget(card)
+
+    def _confirm_hole_card(self, card: HolePlanCard) -> None:
+        page = self._placement_page()
+        if page is None:
+            card.mark_applied({"ok": False, "rows": [], "message": "布管页尚未生成"})
+            return
+        result = page.apply_hole_ops(card.ops)
+        card.mark_applied(result)
+        if not result.get("ok"):
+            return
+        self._on_stage_edited("布管")
+        if self.session is not None and self.session.current_index != 1:
+            if self.session.approved[0]:
+                self.open_stage(1)
+        elif self.card is not None:
+            self.conversation._scroll_to_bottom()
+        self.notify(
+            f"换热管已更新：当前 {result.get('holes_after', 0)} 个换热管孔"
+        )
+
+    def _discard_hole_card(self, card: HolePlanCard) -> None:
+        card.mark_discarded()
+        page = self._placement_page()
+        if page is not None:
+            page.select_centers([])
+        self.notify("已放弃这版换热管调整方案，布管图没有改动")
+
+    # ---------------- 界面操作（用户能点的按钮，Agent 都能按）----------------
+    def _ui_action_page(self) -> TubeLayoutPage | None:
+        return self._placement_page()
+
+    def _run_ui_actions(self, actions) -> list[str]:
+        """执行一串界面动作；返回给人看的执行说明（逐条）。"""
+        notes: list[str] = []
+        page = self._ui_action_page()
+        for action in actions or []:
+            name = getattr(action, "name", "")
+            region = getattr(action, "region", "") or ""
+            rows = int(getattr(action, "rows", 1) or 1)
+            count = int(getattr(action, "count", 0) or 0)
+
+            if name == "clear_selection":
+                if page is None:
+                    notes.append("还没有布管图，无需取消选中。")
+                else:
+                    had = len(page.selected)
+                    page.clear_selection()
+                    notes.append(f"已取消全部选中（原先选中 {had} 个）。")
+                continue
+            if name == "select_all":
+                if page is None:
+                    notes.append("还没有布管图，先保留“管板型式”进入布管。")
+                else:
+                    centers = page.current_centers()
+                    page.select_centers(centers)
+                    notes.append(f"已选中全部 {len(centers)} 个换热管。")
+                continue
+            if name == "select_region":
+                if page is None:
+                    notes.append("还没有布管图，先保留“管板型式”进入布管。")
+                else:
+                    centers = page.select_region(region or "near_shell", rows, count)
+                    where = HOLE_REGIONS.get(region or "near_shell", region or "指定区域")
+                    notes.append(f"已选中{where}的 {len(centers)} 个管孔。")
+                continue
+            if name == "select_tubes":
+                if page is None:
+                    notes.append("还没有布管图，先保留“管板型式”进入布管。")
+                else:
+                    tubes = list(getattr(action, "tubes", []) or [])
+                    centers, problems = page.centers_for_refs(tubes, "select")
+                    if centers:
+                        page.select_centers(centers)
+                    note = f"已按行列号选中 {len(centers)} 个管孔。"
+                    if problems:
+                        note += "没落上的：" + "；".join(problems[:4])
+                    notes.append(note)
+                continue
+            if name == "select_removed":
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    centers = page.removed_centers()
+                    page.select_centers(centers)
+                    notes.append(f"已选中 {len(centers)} 个已删除的管孔（可以说“恢复选中的换热管”）。")
+                continue
+            if name == "invert_selection":
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    alive = set(page.current_centers())
+                    rest = sorted(alive - set(page.selected), key=lambda c: (-c[1], c[0]))
+                    page.select_centers(rest)
+                    notes.append(f"已反选，当前选中 {len(rest)} 个。")
+                continue
+            if name in {"delete_selected", "restore_selected"}:
+                if page is None:
+                    notes.append("还没有布管图。")
+                    continue
+                op = HoleOp(
+                    op="restore" if name == "restore_selected" else "delete",
+                    region="selected",
+                )
+                self._show_hole_card([op])
+                notes.append("已生成换热管调整方案，点“确认执行”后就动图。")
+                continue
+            if name == "delete_components":
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    page.delete_selected()
+                    notes.append("已删除选中的内容（元件/管孔）。")
+                continue
+            if name == "undo":
+                if page is None:
+                    notes.append("还没有可撤销的操作。")
+                else:
+                    page.undo()
+                    notes.append("已撤销上一步。")
+                continue
+            if name == "redraw":
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    page.recompute(reason="按你的要求重新布管")
+                    notes.append(f"已重新布管，当前 {len(page.current_centers())} 个管孔。")
+                continue
+            if name == "max_tubes":
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    outcome = page.max_tubes(count or None)
+                    notes.append(
+                        f"已按最大数量重新布管：S={outcome.get('S', 0):g}，"
+                        f"共 {outcome.get('count', 0)} 个管孔。"
+                        if outcome.get("ok") else outcome.get("message", "布管未成功。")
+                    )
+                continue
+            if name in {"fit", "zoom_in", "zoom_out"}:
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    if name == "fit":
+                        page.view.fit_all()
+                        notes.append("已让布管图适应窗口。")
+                    else:
+                        factor = 1.15 if name == "zoom_in" else 1 / 1.15
+                        page.view.scale(factor, factor)
+                        notes.append("已放大布管图。" if name == "zoom_in" else "已缩小布管图。")
+                continue
+            if name == "switch_stage":
+                stage = str(getattr(action, "stage", "") or "").strip()
+                if self.session is None:
+                    notes.append("请先点击左侧“开始管束设计”。")
+                elif stage in STAGES:
+                    self.open_stage(STAGES.index(stage))
+                    notes.append(f"已切到“{stage}”。")
+                else:
+                    notes.append(f"没有叫“{stage}”的阶段，可选：{'、'.join(STAGES)}。")
+                continue
+            if name == "keep_stage":
+                if self.session is None:
+                    notes.append("请先点击左侧“开始管束设计”。")
+                else:
+                    stage = str(getattr(action, "stage", "") or "").strip()
+                    stage = stage if stage in STAGES else self.session.current_stage
+                    self.keep_current(stage)
+                    notes.append(f"已按“保留”处理“{stage}”。")
+                continue
+            if name == "dump_holes":
+                if page is None:
+                    notes.append("还没有布管结果，先保留“管板型式”进入布管。")
+                else:
+                    rows_data = page.hole_coordinates()
+                    self.conversation.append_widget(HoleCoordinateCard(rows_data))
+                    notes.append(f"已列出全部 {len(rows_data)} 个管孔的绝对坐标，可直接复制成表格。")
+                continue
+            if name in {"dump_components", "remove_components", "convert_to_tube"}:
+                if page is None:
+                    notes.append("还没有布管结果，先保留“管板型式”进入布管。")
+                    continue
+                kind = str(getattr(action, "kind", "") or "")
+                if name == "dump_components":
+                    data = page.component_coordinates(kind)
+                    if not data["rows"]:
+                        notes.append(
+                            f"图上还没有{data['label']}。" if kind else "图上还没有布置任何元件。"
+                        )
+                    else:
+                        self.conversation.append_widget(ComponentCoordinateCard(data))
+                        notes.append(
+                            f"已列出{data['label']} {len(data['rows'])} 个："
+                            "规格 / 形式、所在行列号、绝对坐标都在表里，可一键复制。"
+                        )
+                    continue
+                outcome = page.remove_components(kind)
+                if outcome.get("ok"):
+                    notes.append(
+                        f"{outcome['message']}，当前 {outcome['holes']} 个换热管孔。"
+                    )
+                else:
+                    notes.append(outcome.get("message", "没有可删除的元件。"))
+                continue
+            if name == "set_symmetry":
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    on = str(getattr(action, "value", "") or "").strip().lower() not in {
+                        "关", "off", "false", "0", "否", "不"
+                    }
+                    page.set_symmetry(on)
+                    notes.append("已勾上“对称分布”。" if on else "已取消“对称分布”。")
+                continue
+            if name == "restore_all":
+                if page is None:
+                    notes.append("还没有布管图。")
+                else:
+                    page.restore_tubes()
+                    notes.append(f"已恢复全部，当前 {len(page.current_centers())} 个换热管孔。")
+                continue
+            if name == "clear_chat":
+                self.clear_chat()
+                notes.append("对话已清空。")
+                continue
+            if name == "start_design":
+                self.start_design()
+                notes.append("已开始管束设计：读取正式库前序数据并生成草稿。")
+                continue
+            notes.append(f"没有实现的操作：{name}")
+        self.conversation._scroll_to_bottom()
+        return notes
+
+    # 离线也认这些界面操作（和模型给的 ui_actions 走同一条执行路径）
+    def _kind_from_text(self, compact: str) -> str:
+        """句子里提到的元件类型（“自由拉杆”先于“拉杆”，按 _PLACEMENT_WORDS 的顺序）。"""
+        for word, kind in self._PLACEMENT_WORDS:
+            if word in compact:
+                return kind
+        return ""
+
+    def _parse_ui_words(self, compact: str) -> UIAction | None:
+        if any(word in compact for word in ("取消全选", "清空选中", "取消选中", "全部取消选中")):
+            return UIAction(name="clear_selection")
+        if "反选" in compact:
+            return UIAction(name="invert_selection")
+        if any(word in compact for word in ("全选", "选中全部", "全部选中")):
+            return UIAction(name="select_all")
+
+        # 元件类：要的是拉杆就给拉杆的数据字典，不再是换热管表；
+        # “把拉杆恢复为换热管”= 删掉拉杆并把孔还回去（源程序里拉杆本来就占一个管孔）。
+        element = self._kind_from_text(compact)
+        if element and any(word in compact for word in ("恢复为换热管", "转为换热管", "还原为换热管",
+                                                         "变回换热管", "改回换热管", "恢复成换热管")):
+            return UIAction(name="convert_to_tube", kind=element)
+        if element and any(word in compact for word in ("删除", "删掉", "去掉", "清除", "清掉", "移除", "取消")):
+            if "换热管" not in compact and "管孔" not in compact:
+                return UIAction(name="remove_components", kind=element)
+        if "元件" in compact and any(word in compact for word in ("删除", "删掉", "清空", "去掉")):
+            return UIAction(name="remove_components")
+
+        if "坐标" in compact or "数据字典" in compact or "元件数据" in compact:
+            if element:
+                return UIAction(name="dump_components", kind=element)
+            return UIAction(name="dump_holes")
+        if "撤销" in compact:
+            return UIAction(name="undo")
+        if "重绘" in compact or ("重新布管" in compact and "多布" not in compact):
+            return UIAction(name="redraw")
+        if "全屏" in compact or "适应窗口" in compact:
+            return UIAction(name="fit")
+        if "放大" in compact:
+            return UIAction(name="zoom_in")
+        if "缩小" in compact:
+            return UIAction(name="zoom_out")
+        if any(word in compact for word in ("选中已删除", "选中已删掉的", "选中删掉的")):
+            return UIAction(name="select_removed")
+        if "对称分布" in compact and any(
+            word in compact for word in ("关", "取消", "打开", "开", "勾", "不")
+        ):
+            off = any(word in compact for word in ("关", "取消", "去掉"))
+            return UIAction(name="set_symmetry", value="关" if off else "开")
+        if any(word in compact for word in ("恢复全部", "全部恢复", "把所有删掉的都恢复")):
+            return UIAction(name="restore_all")
+        wants_select = "选中" in compact or (
+            "选择" in compact
+            and not any(verb in compact for verb in self._PLACEMENT_VERBS)
+        )
+        if wants_select and any(
+            word in compact for word in ("最外", "外圈", "壳壁", "隔板槽", "中心", "上方", "下方", "左侧", "右侧")
+        ):
+            region = "near_shell"
+            for word, value in (
+                ("隔板槽", "groove"), ("壳壁", "near_shell"), ("最外", "near_shell"),
+                ("外圈", "near_shell"), ("中心", "center"), ("上方", "top"),
+                ("下方", "bottom"), ("左侧", "left"), ("右侧", "right"),
+            ):
+                if word in compact:
+                    region = value
+                    break
+            rows = 1
+            match = re.search(r"([0-9]+|[一二两三四五六七八九十])\s*圈", compact)
+            if match:
+                token = match.group(1)
+                rows = int(token) if token.isdigit() else self._CN_NUMBERS.get(token, 1)
+            return UIAction(name="select_region", region=region, rows=max(1, rows))
+        return None
 
     def _start_worker(self, fn, callback):
         self._worker_cancelled = False
@@ -2085,6 +2809,7 @@ class DesignWindow(QMainWindow):
         self.conversation.clear()
         self.chat_history = []
         self.placement_cards = []
+        self.hole_cards = []
         for page in self.pages.values():
             page.setParent(None)
             page.deleteLater()

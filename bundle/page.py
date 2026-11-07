@@ -50,6 +50,7 @@ from .items import (
     BlockTubeItem,
     ComponentRectItem,
     FoldedPlateItem,
+    GhostTubeItem,
     RadialHoleItem,
     RodItem,
     TubeItem,
@@ -169,6 +170,10 @@ class TubeLayoutPage(QWidget):
             }
         self.result: engine.LayoutResult | None = None
         self.removed: set[tuple[float, float]] = set()
+        # 最近一次“删换热管”方案删掉的管孔：用户随后说“恢复刚才删掉的管”时只还原这一批
+        self._last_hole_delete: list[tuple[float, float]] = []
+        # 模型给的行列号里查不到/状态不对的那些，如实攒在这里给卡片显示
+        self._ref_problems: list[str] = []
         self.components: list[dict] = []
         self.selected: set[tuple[float, float]] = set()
         self.selected_components: set[int] = set()
@@ -178,6 +183,7 @@ class TubeLayoutPage(QWidget):
         self.issues: list[dict] = []
         self._undo: list[dict] = []
         self._tube_items: dict[tuple[float, float], TubeItem] = {}
+        self._ghost_items: dict[tuple[float, float], GhostTubeItem] = {}
         self._component_items: dict[int, object] = {}
         self._rows_pos: list[list[tuple[float, float]]] = []
         self._rows_neg: list[list[tuple[float, float]]] = []
@@ -838,6 +844,16 @@ class TubeLayoutPage(QWidget):
             if c not in self.removed and c not in occupied
         ]
 
+    def removed_centers(self) -> list[tuple[float, float]]:
+        """已删除（且没有被拉杆/挡管占位）的管孔：图上画成虚线小叉，可点选恢复。"""
+        if self.result is None:
+            return []
+        occupied = {c["center"] for c in self.components if c.get("center")}
+        return [
+            c for c in self.result.master_centers
+            if c in self.removed and c not in occupied
+        ]
+
     def selectable_centers(self) -> list[tuple[float, float]]:
         """可被单击选中的点：换热管孔 + 已布置的普通拉杆。
 
@@ -996,6 +1012,13 @@ class TubeLayoutPage(QWidget):
 
     def _draw_tubes(self, result: engine.LayoutResult) -> None:
         r = result.small_r
+        self._ghost_items.clear()
+        # 已删除的管孔先画（在换热管下面）：虚线圆圈 + 小叉，仍可点选
+        for center in self.removed_centers():
+            ghost = GhostTubeItem(center, r, self)
+            ghost.apply_selected(center in self.selected)
+            self.scene.addItem(ghost)
+            self._ghost_items[center] = ghost
         for center in self.current_centers():
             item = TubeItem(center, r, self)
             item.apply_selected(center in self.selected)
@@ -1186,6 +1209,9 @@ class TubeLayoutPage(QWidget):
             for center, item in self._tube_items.items():
                 if item.is_selected:
                     item.apply_selected(False)
+            for center, item in self._ghost_items.items():
+                if item.is_selected:
+                    item.apply_selected(False)
             for index in list(self.selected_components):
                 other = self._component_items.get(index)
                 if other is not None:
@@ -1196,20 +1222,25 @@ class TubeLayoutPage(QWidget):
             if center in self._tube_items:
                 self.selected.add(center)
                 self._tube_items[center].apply_selected(True)
+            elif center in self._ghost_items:
+                self.selected.add(center)
+                self._ghost_items[center].apply_selected(True)
         self._after_selection_changed()
 
     def _selection_text(self) -> str:
         """底部选中提示：照正式程序，1 个给绝对坐标、2 个给中心距。"""
         if not self.selected:
             return "未选中管孔"
+        deleted = sum(1 for center in self.selected if center in self._ghost_items)
+        suffix = f"（含 {deleted} 个已删除管孔）" if deleted else ""
         if len(self.selected) == 1:
             (x, y), = self.selected
-            return f"已选中 1 个管孔  X {float(x):.1f}  Y {float(y):.1f}"
+            return f"已选中 1 个管孔  X {float(x):.1f}  Y {float(y):.1f}{suffix}"
         if len(self.selected) == 2:
             (x1, y1), (x2, y2) = sorted(self.selected)
             span = math.hypot(float(x2) - float(x1), float(y2) - float(y1))
-            return f"已选中 2 个管孔，中心距 {span:.1f} mm"
-        return f"已选中 {len(self.selected)} 个管孔"
+            return f"已选中 2 个管孔，中心距 {span:.1f} mm{suffix}"
+        return f"已选中 {len(self.selected)} 个管孔{suffix}"
 
     def _clear_selection_state(self) -> None:
         self.selected.clear()
@@ -1252,6 +1283,7 @@ class TubeLayoutPage(QWidget):
         kind = getattr(item, "item_kind", "")
         if kind in {"tube", "rod"}:
             center = item.center
+            deleted = center in self._ghost_items
             if center in self.selected:
                 self.selected.discard(center)
                 item.apply_selected(False)
@@ -1259,6 +1291,10 @@ class TubeLayoutPage(QWidget):
                 self.selected.add(center)
                 item.apply_selected(True)
             self._after_selection_changed()
+            if deleted:
+                self.status_message.emit(
+                    f"已选中 {len(self.selected)} 个已删除管孔（可让我“恢复选中的换热管”）"
+                )
             return
         index = getattr(item, "component_index", None)
         if index is not None:
@@ -1279,7 +1315,7 @@ class TubeLayoutPage(QWidget):
 
     def on_rubber_band(self, rect: QRectF) -> None:
         picked = [
-            center for center in self._tube_items
+            center for center in list(self._tube_items) + list(self._ghost_items)
             if rect.contains(QPointF(center[0], -center[1]))
         ]
         if not picked:
@@ -1292,6 +1328,9 @@ class TubeLayoutPage(QWidget):
         """右键取消筛选：清掉表格选中行、图形选中与元件选中（正式程序同款）。"""
         had_selection = bool(self.selected) or bool(self.selected_components)
         for item in self._tube_items.values():
+            if item.is_selected:
+                item.apply_selected(False)
+        for item in self._ghost_items.values():
             if item.is_selected:
                 item.apply_selected(False)
         self._clear_selection_state()
@@ -2104,8 +2143,15 @@ class TubeLayoutPage(QWidget):
         if kind in {"rod", "free_rod"}:
             # count 是“要布置的根数”；一个种子管经 judge_linkage 会铺满 4 个象限，
             # 所以种子数由展开结果凑到 count 为止（至少 1 个种子，源程序里
-            # 选 1 根就自动补成 4 根）
-            seeds = pick_centers(pool, min(len(pool), max(item.count, 1) * 2 + 4), item.region)
+            # 选 1 根就自动补成 4 根）。单次根数有上限，避免“所有拉杆”被理解成几百根。
+            from .placement import ROD_LIMIT_PER_PLACEMENT
+
+            target = max(1, min(int(item.count or 1), ROD_LIMIT_PER_PLACEMENT))
+            # 镜像经常落到同一组（4 个点互相镜像），种子要多给一些才凑得够根数；
+            # 上限 60 个种子，避免“所有拉杆”把整张图铺满。
+            seeds = pick_centers(
+                pool, min(len(pool), min(target * 2 + 4, 60)), item.region
+            )
             picked: list = []
             for seed in seeds:
                 group = [
@@ -2116,7 +2162,7 @@ class TubeLayoutPage(QWidget):
                     continue
                 out["seeds"].append(seed)
                 picked.extend(group)
-                if len(picked) >= item.count:
+                if len(picked) >= target:
                     break
             out["tubes"] = picked
             return out
@@ -2161,6 +2207,22 @@ class TubeLayoutPage(QWidget):
             if item.region in {"top", "bottom", "left", "right"}:
                 reverse = item.region in {"bottom", "right"}
                 pairs = sorted(pairs, key=lambda p: (p[0][0] + p[0][1]), reverse=reverse)
+
+            def mirror_is_distinct(pair) -> int:
+                """对称分布时优先挑“镜像后确实是另一对”的参照管。
+
+                压在竖直中心线上的那一对镜像就是自己（源程序 judge_linkage_y 的结果
+                还是同一对），选它只会出一块板 / 一根挡管；挑偏心的那一对才会在两侧
+                各出一块，这才是用户勾“对称分布”想看到的结果。
+                """
+                if not self._symmetry:
+                    return 1
+                mirror = self._symmetry_pair_partners(pair)
+                if not mirror:
+                    return 2
+                return 0 if {tuple(p) for p in mirror[0]} != {tuple(p) for p in pair} else 2
+
+            pairs = sorted(pairs, key=mirror_is_distinct)   # 稳定排序：同一档里保持上面排好的次序
             # 勾“对称分布”时，源程序在另一侧再补一块挡板 / 一根挡管
             out["pairs"] = self._symmetry_pairs(pairs[: max(1, item.count)])
             out["tubes"] = [c for pair in out["pairs"] for c in pair]
@@ -2184,34 +2246,53 @@ class TubeLayoutPage(QWidget):
     # 编号：行号 = 至水平中心线第几排（正上负下），列号 = 至竖直中心线第几列
     # （正右负左，正好落在中心线上记 0）。
     def tube_row_col(self, center) -> tuple[int, int] | None:
+        """坐标 → (行号, 列号)。
+
+        行号/列号一律按**满布管孔**（result.master_centers）编号，不看当前还剩几根：
+        删掉管子以后行号不会整体错位，已删管孔也能报出原来的行列号（以前这里
+        找不到就直接给 (0, 0)，方案卡上全是“行0列0”）。
+        """
         if self.result is None:
             return None
         x, y = float(center[0]), float(center[1])
-        rows = self._rows_pos if y >= 0 else self._rows_neg
-        for index, group in enumerate(rows):
-            if not any(abs(cx - x) < 1e-6 and abs(cy - y) < 1e-6 for cx, cy in group):
-                continue
-            row_label = (index + 1) * (1 if y >= 0 else -1)
-            if abs(x) < 1e-6:
-                return row_label, 0
-            # 只数“同一侧、且更靠近竖直中心线”的管；正好在 x=0 的那根不算任何一侧
-            nearer = [
-                cx for cx, _cy in group
-                if ((cx > 1e-6) if x > 0 else (cx < -1e-6)) and abs(cx) < abs(x) - 1e-6
-            ]
-            col_label = len(nearer) + 1
-            return row_label, col_label if x > 0 else -col_label
-        return None
+        master = [(float(c[0]), float(c[1])) for c in self.result.master_centers]
+        if not master:
+            return None
+        reps = geometry.build_axis_cluster_reps([abs(c[1]) for c in master])
+        key = geometry.nearest_axis_cluster_key(abs(y), reps)
+        if key is None:
+            return None
+        row_label = (key + 1) * (1 if y >= 0 else -1)
+        same_row = [
+            c for c in master
+            if (c[1] >= 0) == (y >= 0)
+            and abs(abs(c[1]) - reps[key]) <= geometry.AXIS_GROUP_TOL + 1e-9
+        ]
+        if abs(x) < 1e-6:
+            return row_label, 0
+        # 只数“同一侧、且更靠近竖直中心线”的管；正好在 x=0 的那根不算任何一侧
+        nearer = [
+            cx for cx, _cy in same_row
+            if ((cx > 1e-6) if x > 0 else (cx < -1e-6)) and abs(cx) < abs(x) - 1e-6
+        ]
+        col_label = len(nearer) + 1
+        return row_label, col_label if x > 0 else -col_label
 
     def center_for_row_col(self, row: int, col: int):
         """（行号, 列号）→ 换热管绝对坐标；没有这个管孔返回 None。"""
         if self.result is None or row == 0:
             return None
-        rows = self._rows_pos if row > 0 else self._rows_neg
+        master = [(float(c[0]), float(c[1])) for c in self.result.master_centers]
+        reps = geometry.build_axis_cluster_reps([abs(c[1]) for c in master])
         index = abs(int(row)) - 1
-        if index >= len(rows):
+        if index >= len(reps):
             return None
-        group = rows[index]
+        group = [
+            c for c in master
+            if (c[1] >= 0) == (row > 0)
+            and abs(abs(c[1]) - reps[index]) <= geometry.AXIS_GROUP_TOL + 1e-9
+        ]
+        group.sort(key=lambda c: abs(c[0]))
         if col == 0:
             for cx, cy in group:
                 if abs(cx) < 1e-6:
@@ -2321,10 +2402,14 @@ class TubeLayoutPage(QWidget):
                 else:
                     value = str(current.get(name) or item.options.get(name) or "").strip()
             is_form = name.endswith("形式")
-            # 旁路挡板宽度是程序按“到圆边的距离 − 孔桥 − do/2”算出来的，不让手改
-            locked = item.kind == "bypass" and name == "旁路挡板宽度"
+            # 旁路挡板宽度、中间挡板宽度都是程序按几何算出来的（正式程序写回参数表），
+            # 卡片上只读显示算好的值，避免手填一个跟板长对不上的数字
+            locked = name in {"旁路挡板宽度", "中间挡板宽度"}
             if locked:
-                value = self.preview_bypass_width(item) or value
+                if item.kind == "bypass":
+                    value = self.preview_bypass_width(item) or value
+                elif item.kind == "center_baffle":
+                    value = self.preview_baffle_width(item) or value
             if is_form:
                 # 形式决定几何、也决定“要不要参照管”，选项以程序里的可选值为准
                 if item.kind.startswith("impingement") or "防冲板" in name:
@@ -2447,6 +2532,16 @@ class TubeLayoutPage(QWidget):
             geometry = self._bypass_geometry(centers[0])
             return self._pretty(max(float(v) for v in geometry["size"]))
         except Exception:  # noqa: BLE001 - 预览算不出来就不显示，别把卡片弄挂
+            return ""
+
+    def preview_baffle_width(self, item) -> str:
+        """方案预览：中间挡板长度 = 两参照管中心距 − do − 2×名义孔桥（正式程序算法）。"""
+        try:
+            pairs = self._resolve_item(item).get("pairs") or []
+            if not pairs:
+                return ""
+            return self._pretty(self._pair_geometry("center_baffle", pairs[0], None)["size"][0])
+        except Exception:  # noqa: BLE001
             return ""
 
     def preview_placement(self, items) -> dict:
@@ -2817,9 +2912,14 @@ class TubeLayoutPage(QWidget):
             near = max(column, key=lambda c: c[1]) if column else (x, y)
             edge = math.sqrt(max(radius ** 2 - near[0] ** 2, 0.0))
             width = abs(abs(edge - abs(near[1])) - bridge - do / 2.0)
-            width = min(max(width, 1.0), max(2.0 * edge, 1.0))
+            # 外边缘压在圆上时，板的两个厚度转角比中线更靠外：按转角处收紧，
+            # 保证整块板（含厚度）都落在折流板外径圆里
+            outer_edge = math.sqrt(
+                max(radius ** 2 - (abs(near[0]) + thickness / 2.0) ** 2, 0.0)
+            )
+            width = min(max(width, 1.0), max(2.0 * outer_edge, 1.0))
             top_side = abs(edge - y) <= abs(y + edge)
-            outer = edge if top_side else -edge
+            outer = outer_edge if top_side else -outer_edge
             mid = (x, outer - width / 2.0 if top_side else outer + width / 2.0)
             return {"center": mid, "size": (thickness, width), "angle": 0.0}
 
@@ -2827,9 +2927,12 @@ class TubeLayoutPage(QWidget):
         near = min(row, key=lambda c: c[0]) if row else (x, y)
         edge = math.sqrt(max(radius ** 2 - near[1] ** 2, 0.0))
         width = abs(abs(edge - abs(near[0])) - bridge - do / 2.0)
-        width = min(max(width, 1.0), max(2.0 * edge, 1.0))
+        outer_edge = math.sqrt(
+            max(radius ** 2 - (abs(near[1]) + thickness / 2.0) ** 2, 0.0)
+        )
+        width = min(max(width, 1.0), max(2.0 * outer_edge, 1.0))
         left_side = abs(x + edge) < abs(edge - x)
-        outer = -edge if left_side else edge
+        outer = -outer_edge if left_side else outer_edge
         mid = (outer + width / 2.0 if left_side else outer - width / 2.0, y)
         return {"center": mid, "size": (width, thickness), "angle": 0.0}
 
@@ -3115,6 +3218,527 @@ class TubeLayoutPage(QWidget):
             "occupied": holes_before - holes_after,
         }
 
+
+    # ------------------------------------------------ 换热管增删（对话里删/补管）
+    def _hole_op_pool(self, op) -> list[tuple[float, float]]:
+        """这条操作的作用池：删管看当前还在的换热管，补管看被删掉的那些。"""
+        if op.op == "restore":
+            occupied = {
+                (round(float(c["center"][0]), 6), round(float(c["center"][1]), 6))
+                for c in self.components if c.get("center")
+            }
+            # 没指定位置又没指定根数 = “把刚才删掉的管还回来”：只认最近一批，
+            # 免得把防冲板干涉删除、拉杆占孔那些历史删除也一起恢复
+            batch = self._last_hole_delete if (op.region == "any" and not op.count) else []
+            source = batch or list(self.removed)
+            return [
+                (float(x), float(y)) for x, y in source
+                if (round(float(x), 6), round(float(y), 6)) not in occupied
+                and any((round(float(c[0]), 6), round(float(c[1]), 6))
+                        == (round(float(x), 6), round(float(y), 6)) for c in self.removed)
+            ]
+        return self.current_centers()
+
+    def _outline_ring(self, pool, layers: int = 1):
+        """布管外轮廓：每行最左、最右各 layers 根，**再加最上、最下一整排**。
+
+        以前按半径逐层剥离（±40° 扇形内没有更靠外的邻管才算最外层），
+        正三角形布管下算出来是贯穿中间的锯齿——行19列-3、行18列-4、行11列-9…
+        用户的原话是“不就是每行最左、最右的换热管吗”，于是改成按行取两端。
+
+        但只取两端时，左右两条弧爬到 0°/180° 就断了，顶部那一排（示例 6 根）
+        和底部那一排的中间几根空着——用户在图上一眼圈出来：最上和最下一整排
+        也属于外轮廓。所以：中间各行取两端，最上 / 最下各 layers 排整排全取。
+        """
+        from .placement import group_lines
+
+        out: list[tuple[float, float]] = []
+        seen: set[tuple[float, float]] = set()
+        lines = group_lines(pool, "row")          # 行按 y 由高到低排好，lines[0] 是最上一排
+        take = max(1, int(layers))
+        cap = min(take, len(lines))
+        caps = set(range(cap)) | {len(lines) - 1 - i for i in range(cap)}
+        for index, line in enumerate(lines):
+            ordered = sorted(line, key=lambda c: c[0])
+            if index in caps:                     # 最上 / 最下一整排，整排都要
+                points = list(ordered)
+            else:
+                n = max(1, min(len(ordered), take))
+                points = list(ordered[:n]) + list(ordered[-n:])
+            for point in points:
+                key = (round(point[0], 6), round(point[1], 6))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((float(point[0]), float(point[1])))
+        out.sort(key=lambda c: (-round(c[1], 3), c[0]))
+        return out
+
+    def _boundary_ring(self, pool, layers: int = 1, outer: bool = True):
+        """取“最外层/最内层”的若干圈管孔。
+
+        以前 near_shell 只是按半径排个序，count 给 0 时整片 630 根全中——
+        用户说“删最外一圈”结果全删了。这里按“这一圈有没有更靠外的邻管”逐层剥离：
+        对每根管，若在 ±40° 扇形、1.8 倍中心距内有更靠外的管，它就还在里面一层。
+        """
+        remaining = list(pool)
+        pitch = float(getattr(self.result, "S", 0) or 0) or 32.0
+        picked: list[tuple[float, float]] = []
+        span = math.radians(40.0)
+        for _ in range(max(1, int(layers))):
+            if not remaining:
+                break
+            layer = []
+            for point in remaining:
+                rp = math.hypot(point[0], point[1])
+                ap = math.atan2(point[1], point[0])
+                edge = True
+                for other in remaining:
+                    if other is point:
+                        continue
+                    ro = math.hypot(other[0], other[1])
+                    if (ro <= rp + 1e-6) if outer else (ro >= rp - 1e-6):
+                        continue
+                    delta = abs((math.atan2(other[1], other[0]) - ap + math.pi)
+                                % (2 * math.pi) - math.pi)
+                    if delta <= span and math.hypot(
+                        other[0] - point[0], other[1] - point[1]
+                    ) <= 1.8 * pitch:
+                        edge = False
+                        break
+                if edge:
+                    layer.append(point)
+            if not layer:
+                break
+            picked.extend(layer)
+            drop = {id(p) for p in layer}
+            remaining = [p for p in remaining if id(p) not in drop]
+        picked.sort(key=lambda c: (-round(c[1], 3), c[0]))
+        return picked
+
+    def resolve_hole_op(self, op) -> list[tuple[float, float]]:
+        """把“删哪几根”解析成真实管孔：模型只给区域/排数，坐标一律由程序算。
+
+        区域照正式程序删管的几何含义：
+        · groove：隔板槽两侧——按到槽线的距离分行/分列，两侧各取最近 rows 排；
+        · near_shell / center：按到圆心的距离由外向内 / 由内向外；
+        · top/bottom/left/right：按坐标排序取一整片；
+        · selected：用图上当前选中的管孔。
+        """
+        from .placement import group_lines
+
+        pool = self._hole_op_pool(op)
+        if not pool:
+            return []
+        region = op.region
+        chosen: list[tuple[float, float]] = []
+        if getattr(op, "tubes", None):
+            # 模型自己看着布管图挑的管孔：照单执行，程序不插嘴改口径
+            centers, problems = self.centers_for_refs(
+                list(op.tubes), "restore" if op.op == "restore" else "delete"
+            )
+            self._ref_problems = problems
+            chosen = centers
+        elif region == "selected":
+            wanted = {(round(c[0], 6), round(c[1], 6)) for c in self.selected}
+            chosen = [c for c in pool if (round(c[0], 6), round(c[1], 6)) in wanted]
+            # 删管时若选中集合全是“已删除的管”，说明用户想反向恢复，交给 restore 分支
+        elif region == "removed":
+            wanted = {(round(c[0], 6), round(c[1], 6)) for c in self.removed_centers()}
+            chosen = [c for c in pool if (round(c[0], 6), round(c[1], 6)) in wanted]
+        elif region == "groove":
+            axis = self._groove_axis()
+            orient = "row" if axis == "y" else "col"
+            index = 1 if orient == "row" else 0
+            positive: list[tuple[float, list]] = []
+            negative: list[tuple[float, list]] = []
+            for line in group_lines(pool, orient):
+                coord = float(line[0][index])
+                if abs(coord) < 1e-6:
+                    continue                      # 正压在槽线上的那排不参与
+                (positive if coord > 0 else negative).append((abs(coord), line))
+            positive.sort(key=lambda item: item[0])
+            negative.sort(key=lambda item: item[0])
+            take = max(1, int(op.rows))
+            for _distance, line in positive[:take] + negative[:take]:
+                chosen.extend(line)
+            chosen.sort(key=lambda c: (-round(c[1], 3), c[0]))
+        elif region in {"near_shell", "outline"}:
+            # “最外层”= 布管轮廓，每行最左、最右各 rows 根 + 最上/最下各 rows 整排
+            chosen = self._outline_ring(pool, max(1, int(op.rows)))
+        elif region == "center":
+            # “最内圈”仍然按半径由内向外剥离，rows 是圈数
+            chosen = self._boundary_ring(pool, layers=max(1, int(op.rows)), outer=False)
+        elif region in {"top", "bottom", "left", "right"}:
+            key = {
+                "top": lambda c: (-c[1], c[0]),
+                "bottom": lambda c: (c[1], c[0]),
+                "left": lambda c: (c[0], -c[1]),
+                "right": lambda c: (-c[0], -c[1]),
+            }[region]
+            lines = group_lines(pool, "row" if region in {"top", "bottom"} else "col")
+            lines = sorted(
+                lines,
+                key=lambda line: (
+                    -max(abs(c[1]) for c in line) if region == "top"
+                    else max(abs(c[1]) for c in line) if region == "bottom"
+                    else -max(abs(c[0]) for c in line) if region == "right"
+                    else max(abs(c[0]) for c in line)
+                ),
+            )
+            chosen = []
+            for line in lines[: max(1, int(op.rows))]:
+                chosen.extend(sorted(line, key=key))
+        else:
+            chosen = sorted(pool, key=lambda c: (-round(c[1], 3), c[0]))
+        if op.count:
+            chosen = chosen[: int(op.count)]
+        return [(float(c[0]), float(c[1])) for c in chosen]
+
+    def preview_hole_ops(self, ops) -> dict:
+        """换热管增删方案：先在图上圈出来给用户过目，确认后才改图。"""
+        rows = []
+        picked: list[tuple[float, float]] = []
+        problems: list[str] = []
+        holes = len(self.current_centers())
+        delta = 0
+        for op in ops:
+            self._ref_problems = []
+            centers = self.resolve_hole_op(op)
+            problems.extend(self._ref_problems)     # 模型给的行列号查不到的，如实报出来
+            rows.append({
+                "op": op.op,
+                "label": op.label,
+                "where": op.describe(),
+                "count": len(centers),
+                "refs": [self._tube_ref(c) for c in centers[:8]],
+                "more": max(len(centers) - 8, 0),
+            })
+            picked.extend(centers)
+            delta += len(centers) if op.op == "restore" else -len(centers)
+        if picked:
+            self.select_centers(picked)
+        return {
+            "rows": rows,
+            "holes": holes,
+            "remaining": max(holes + delta, 0),
+            "total": sum(row["count"] for row in rows),
+            "problems": problems,
+        }
+
+    def apply_hole_ops(self, ops) -> dict:
+        """落地方案：删管=从管孔池里去掉，补管=把之前删掉的管还回来。"""
+        if self.result is None:
+            return {"ok": False, "rows": [], "message": "当前还没有布管结果"}
+        self._push_undo()
+        holes_before = len(self.current_centers())
+        rows = []
+        deleted_batch: list[tuple[float, float]] = []
+        for op in ops:
+            centers = self.resolve_hole_op(op)
+            targets = {(round(c[0], 6), round(c[1], 6)) for c in centers}
+            changed = 0
+            if op.op == "restore":
+                for center in centers:
+                    key = (round(center[0], 6), round(center[1], 6))
+                    for existing in [c for c in self.removed if (round(c[0], 6), round(c[1], 6)) == key]:
+                        self.removed.discard(existing)
+                        changed += 1
+            else:
+                kept = []
+                for component in self.components:
+                    center = component.get("center")
+                    if (
+                        component.get("kind") in {"rod", "free_rod", "block_tube"}
+                        and center
+                        and (round(float(center[0]), 6), round(float(center[1]), 6)) in targets
+                    ):
+                        continue
+                    kept.append(component)
+                self.components = kept
+                for center in centers:
+                    key = (round(center[0], 6), round(center[1], 6))
+                    if not any((round(c[0], 6), round(c[1], 6)) == key for c in self.removed):
+                        self.removed.add((float(center[0]), float(center[1])))
+                        deleted_batch.append((float(center[0]), float(center[1])))
+                        changed += 1
+            rows.append({
+                "label": op.label,
+                "where": op.describe(),
+                "changed": changed,
+                "requested": len(centers),
+            })
+        if deleted_batch:
+            self._last_hole_delete = list(deleted_batch)
+        self._clear_selection_state()
+        self.rebuild_scene()
+        self.refresh_hole_table()
+        holes_after = len(self.current_centers())
+        return {
+            "ok": any(row["changed"] for row in rows),
+            "rows": rows,
+            "holes_before": holes_before,
+            "holes_after": holes_after,
+            "message": "" if any(row["changed"] for row in rows) else "这个范围内没有可调整的换热管",
+        }
+
+    def select_region(self, region: str, rows: int = 1, count: int = 0,
+                      include_removed: bool = False) -> list[tuple[float, float]]:
+        """按区域选管（“选中最外一圈”“选中隔板槽两侧”这类界面操作）。
+
+        和智能删管共用一套区域规则，落点全由当前布管结果算出来，图上立即高亮。
+        """
+        from .placement import HoleOp
+
+        op = HoleOp(op="delete", region=region, count=count, rows=rows)
+        centers = self.resolve_hole_op(op)
+        if include_removed:
+            wanted = {(round(c[0], 6), round(c[1], 6)) for c in self.removed_centers()}
+            extra = [c for c in self.result.master_centers
+                     if (round(c[0], 6), round(c[1], 6)) in wanted
+                     and (round(c[0], 6), round(c[1], 6))
+                     not in {(round(x[0], 6), round(x[1], 6)) for x in centers}]
+            centers.extend(extra)
+        self.select_centers(centers)
+        return centers
+
+    def hole_coordinates(self) -> list[dict]:
+        """满布管孔的全量坐标表（行列号 + X/Y + 当前状态），用于“列出所有坐标”。"""
+        if self.result is None:
+            return []
+        alive = {(round(c[0], 6), round(c[1], 6)) for c in self.current_centers()}
+        rows = []
+        for center in self.result.master_centers:
+            key = (round(center[0], 6), round(center[1], 6))
+            ref = self._tube_ref(center)
+            ref["state"] = "在" if key in alive else (
+                "已删除" if center in self.removed else "占孔"
+            )
+            rows.append(ref)
+        return rows
+
+    # ------------------------------------------------------------ 给模型“看”的布管图
+    # Agent 得先看得见，才谈得上自己判断。这里把当前布管画成一张字符图：
+    # 模型看图决定“外轮廓/某一圈/上部”到底是哪几根，再用行列号回指；
+    # 程序只负责把它指的那些管孔找出来、落到图上，不再替它解释“最外层”是什么。
+    def plan_view_text(self) -> str:
+        if self.result is None:
+            return ""
+        master = [(float(c[0]), float(c[1])) for c in self.result.master_centers]
+        if not master:
+            return ""
+        alive = {(round(c[0], 6), round(c[1], 6)) for c in self.current_centers()}
+        removed = {(round(c[0], 6), round(c[1], 6)) for c in self.removed}
+        pitch = float(getattr(self.result, "S", 0) or 0) or 32.0
+        step = max(pitch / 2.0, 1e-6)
+        xmin = min(c[0] for c in master)
+        xmax = max(c[0] for c in master)
+        width = int(round((xmax - xmin) / step)) + 1
+
+        lines_by_row: dict[int, list[tuple[int, float, float]]] = {}
+        max_col = 0
+        for center in master:
+            row_col = self.tube_row_col(center)
+            if row_col is None:
+                continue
+            row, col = row_col
+            max_col = max(max_col, abs(col))
+            lines_by_row.setdefault(row, []).append((col, center[0], center[1]))
+        order = sorted(lines_by_row, key=lambda r: (-abs(r), -r))
+
+        out = [
+            "布管图（o=换热管在  x=已删除  #=被元件占孔；"
+            "行号：上正下负、1 是贴中心线那排；列号：靠近竖直中心线为 1、左右各一套，0 是正中间那根）",
+        ]
+        for row in order:
+            line = sorted(lines_by_row[row], key=lambda item: item[1])
+            cells = [" "] * width
+            cols = []
+            for col, cx, cy in line:
+                index = int(round((cx - xmin) / step))
+                if 0 <= index < width:
+                    key = (round(cx, 6), round(cy, 6))
+                    cells[index] = "o" if key in alive else ("x" if key in removed else "#")
+                cols.append(col)
+            text = "".join(cells).rstrip()
+            y = line[0][2] if line else 0.0
+            out.append(
+                f"行{row:+d} y={y:7.1f} |{text}| {len(line):2d}根 列[{','.join(str(c) for c in cols)}]"
+            )
+        out.append(
+            f"共 {len(master)} 个管孔（可用 {len(alive)}、已删除 {len(master) - len(alive)}），"
+            f"中心距 S={pitch:g}，每侧最多 {max_col} 列"
+        )
+        return "\n".join(out)
+
+    def centers_for_refs(self, refs, op: str = "delete") -> tuple[list[tuple[float, float]], list[str]]:
+        """模型给的行列号 → 真实管孔坐标。程序只做“查得到/状态对不对”，不改口径。
+
+        op="delete" 只认当前还在的换热管；op="restore" 只认已删除的管孔；
+        op="select" 两者都认（图上都能点）。找不到的逐个回一句人话。
+        """
+        from .placement import row_col_of
+
+        centers: list[tuple[float, float]] = []
+        problems: list[str] = []
+        alive = {(round(c[0], 6), round(c[1], 6)) for c in self.current_centers()}
+        removed = {(round(c[0], 6), round(c[1], 6)) for c in self.removed_centers()}
+        seen: set[tuple[float, float]] = set()
+        for ref in refs or []:
+            row, col = row_col_of(ref)
+            if row is None:
+                problems.append(f"看不懂这个管孔位置：{ref}")
+                continue
+            center = self.center_for_row_col(row, col)
+            if center is None:
+                problems.append(f"行{row}列{col} 上没有管孔")
+                continue
+            key = (round(center[0], 6), round(center[1], 6))
+            if key in seen:
+                continue
+            if op == "delete" and key not in alive:
+                problems.append(f"行{row}列{col} 现在不是可删的换热管")
+                continue
+            if op == "restore" and key not in removed:
+                problems.append(f"行{row}列{col} 不是已删除的管孔")
+                continue
+            seen.add(key)
+            centers.append(center)
+        return centers, problems
+
+    # ------------------------------------------------------------ 元件数据字典
+    # 每个元件在正式程序里都有一份自己的数据（拉杆有形式/直径，挡板有板长/板厚，
+    # 防冲板有形式/折边角…）。用户要“拉杆坐标”时，必须给拉杆这份数据，
+    # 不能一律摊换热管表。
+    COMPONENT_SPEC = {
+        "rod": ("拉杆形式", "拉杆直径"),
+        "free_rod": ("自由拉杆形式", "自由拉杆直径"),
+        "block_tube": ("中间挡管安装方式",),
+        "bypass": ("旁路挡板宽度", "旁路挡板厚度"),
+        "center_baffle": ("中间挡板厚度",),
+        "impingement": ("防冲板形式", "防冲板厚度", "防冲板宽度"),
+        "impingement_folded": ("防冲板形式", "防冲板厚度", "防冲板折边角度"),
+        "impingement_welded": ("防冲板形式", "防冲板厚度", "防冲板宽度"),
+        "slide": ("滑道形式", "滑道高度"),
+        "screw_ring": ("吊环螺钉规格",),
+        "radial_hole": (),
+    }
+
+    # 会占掉一个换热管孔的元件（放上去时 removed.add(孔)，删掉时要把孔还回去）
+    OCCUPYING_KINDS = {"rod", "free_rod", "block_tube", "radial_hole"}
+
+    @staticmethod
+    def _kind_match(comp_kind: str, wanted: str) -> bool:
+        """元件类型匹配：空=全部；impingement 覆盖三种防冲板形式。"""
+        if not wanted:
+            return True
+        if comp_kind == wanted:
+            return True
+        return wanted == "impingement" and comp_kind.startswith("impingement")
+
+    def component_coordinates(self, kind: str = "") -> dict:
+        """按元件类型摊出各自的数据字典（“输出所有拉杆坐标”就只给拉杆）。
+
+        字段照正式程序：拉杆=形式 + 直径 LB_TieRodD + 所在管孔行列号 + 绝对坐标；
+        挡板类=板长/板厚/中心坐标；不占孔的元件（滑道、吊环螺钉）没有行列号。
+        """
+        wanted = str(kind or "").strip()
+        label = COMPONENT_LABEL.get(wanted, "全部元件") if wanted else "全部元件"
+        rows: list[dict] = []
+        for index, comp in enumerate(self.components, start=1):
+            comp_kind = str(comp.get("kind") or "")
+            if not self._kind_match(comp_kind, wanted):
+                continue
+            center = comp.get("center") or (0.0, 0.0)
+            cx, cy = float(center[0]), float(center[1])
+            occupied = comp_kind in self.OCCUPYING_KINDS
+            ref = self._tube_ref((cx, cy)) if occupied else {}
+            spec: list[str] = []
+            for name in self.COMPONENT_SPEC.get(comp_kind, ()):
+                value = str(comp.get(name) or self._param_text(name) or "").strip()
+                if not value:
+                    continue
+                if name.endswith("直径"):
+                    spec.append(f"φ{value}")
+                else:
+                    spec.append(value)
+            size = comp.get("size") or ()
+            if size and len(size) >= 2:
+                spec.append(f"{float(size[0]):g}×{float(size[1]):g}")
+            if comp.get("length"):
+                spec.append(f"板长{float(comp['length']):g}")
+            angle = comp.get("angle")
+            if angle not in (None, 0, 0.0):
+                spec.append(f"{float(angle):g}°")
+            rows.append({
+                "no": len(rows) + 1,
+                "name": COMPONENT_LABEL.get(comp_kind, comp_kind),
+                "spec": " ".join(spec) or "-",
+                "row": ref.get("row", ""),
+                "col": ref.get("col", ""),
+                "x": cx,
+                "y": cy,
+                "note": str(comp.get("note") or ("占孔" if occupied else "不占孔")),
+            })
+        return {"kind": wanted, "label": label, "rows": rows}
+
+    def component_kinds(self) -> list[tuple[str, str, int]]:
+        """当前图上所有元件类型及数量：[(kind, 中文名, 个数)]。"""
+        counts: dict[str, int] = {}
+        for comp in self.components:
+            kind = str(comp.get("kind") or "")
+            counts[kind] = counts.get(kind, 0) + 1
+        order = list(COMPONENT_LABEL)
+        return [
+            (kind, COMPONENT_LABEL.get(kind, kind), counts[kind])
+            for kind in order if counts.get(kind)
+        ]
+
+    def remove_components(self, kind: str = "") -> dict:
+        """删掉某一类（或全部）元件，并把占用的管孔还给换热管。
+
+        这就是“把拉杆恢复为换热管”的落地：拉杆当初是 removed.add(孔) + 记一条
+        component 画出来的，删元件时同步 discard 那个孔，管子就回图上了。
+        """
+        if not self.components:
+            return {"ok": False, "removed": 0, "restored": 0,
+                    "message": "图上还没有布置任何元件"}
+        wanted = str(kind or "").strip()
+        self._push_undo()
+        kept = []
+        removed = 0
+        restored = 0
+        for comp in self.components:
+            comp_kind = str(comp.get("kind") or "")
+            hit = self._kind_match(comp_kind, wanted)
+            if not hit:
+                kept.append(comp)
+                continue
+            removed += 1
+            center = comp.get("center")
+            if center and comp_kind in self.OCCUPYING_KINDS:
+                key = (round(float(center[0]), 6), round(float(center[1]), 6))
+                for existing in [
+                    c for c in self.removed
+                    if (round(float(c[0]), 6), round(float(c[1]), 6)) == key
+                ]:
+                    self.removed.discard(existing)
+                    restored += 1
+        self.components = kept
+        self._clear_selection_state()
+        self.rebuild_scene()
+        self.refresh_hole_table()
+        name = COMPONENT_LABEL.get(wanted, wanted) if wanted else "全部元件"
+        return {
+            "ok": removed > 0,
+            "removed": removed,
+            "restored": restored,
+            "holes": len(self.current_centers()),
+            "message": (
+                f"已删除全部 {removed} 个{name}" + (f"，{restored} 个管孔恢复为换热管" if restored else "")
+                if removed else f"图上没有{name}",
+            )[0],
+        }
 
     def place_impingement_top(self, count: int = 1) -> int:
         """防冲板：每块跨两根参照管，优先取上方（正式程序 on_dangban_click）。"""
