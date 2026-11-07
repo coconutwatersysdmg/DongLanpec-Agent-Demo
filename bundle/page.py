@@ -370,7 +370,7 @@ class TubeLayoutPage(QWidget):
         self.pipe_button.clicked.connect(lambda: self.recompute(reason="用户点击布管"))
         action_bar.addWidget(self.pipe_button)
         self.fullscreen_button = None
-        for text, slot in (("撤销", self.undo), ("重绘", self.rebuild_scene), ("全屏", self.toggle_fullscreen)):
+        for text, slot in (("撤销", self.undo), ("全屏", self.toggle_fullscreen)):
             button = QPushButton(text)
             button.setCursor(Qt.PointingHandCursor)
             button.setStyleSheet(

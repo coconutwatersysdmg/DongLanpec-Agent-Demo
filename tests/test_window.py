@@ -6,7 +6,7 @@ import unittest
 from PyQt5.QtCore import QCoreApplication, QEvent, Qt
 from PyQt5.QtGui import QTextCursor
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QLabel
+from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 
 from db.production import DatabaseUnavailable
 from bundle.page import TubeLayoutPage
@@ -298,6 +298,14 @@ class WindowTests(unittest.TestCase):
         self.assertGreaterEqual(widths[1], 120)
         self.assertGreaterEqual(widths[2], 180)
         self.assertGreaterEqual(widths[3], 50)
+
+    def test_layout_action_bar_does_not_show_redundant_redraw_button(self):
+        page = TubeLayoutPage({}, "AEU", {})
+        button_texts = [button.text() for button in page.findChildren(QPushButton)]
+
+        self.assertNotIn("重绘", button_texts)
+        self.assertIn("撤销", button_texts)
+        self.assertIn("全屏", button_texts)
 
     def test_switching_stage_exits_preview_pane_fullscreen_cleanly(self):
         self.window.session = DesignSession(
