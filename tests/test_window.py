@@ -3,12 +3,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import unittest
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, Qt
 from PyQt5.QtGui import QTextCursor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLabel
 
 from db.production import DatabaseUnavailable
+from bundle.page import TubeLayoutPage
 from models import STAGES
 from session import DesignSession
 from bundle.stages import SheetFormStage, TubeConnectionStage
@@ -70,6 +71,8 @@ class WindowTests(unittest.TestCase):
     def tearDown(self):
         self.window.close()
         self.window.deleteLater()
+        # 只清理 Qt 的延迟销毁，不在 tearDown 中执行定时器/普通事件。
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
     def test_stage_buttons_use_formal_names(self):
         labels = [button.text() for button in self.window.stage_buttons]
@@ -257,6 +260,65 @@ class WindowTests(unittest.TestCase):
                      for i in range(combo.count()))
         # 右对齐 lineEdit、下拉箭头和样式内边距都要留空间；否则会从左边裁掉“螺”。
         self.assertGreaterEqual(combo.minimumWidth(), widest + 72)
+
+    def test_layout_fullscreen_uses_the_whole_preview_pane_for_the_graph(self):
+        page = TubeLayoutPage({}, "AEU", {}, parent=self.window)
+        page.resize(1200, 600)
+        self.window.preview_host.show()
+        page.pane_fullscreen_requested.connect(self.window.set_preview_pane_fullscreen)
+
+        page.toggle_fullscreen()
+
+        self.assertFalse(self.window.isFullScreen(), "不应把整个主窗口切换为系统全屏")
+        self.assertTrue(page.graphics_expanded)
+        self.assertTrue(page.left_frame.isHidden())
+        self.assertTrue(page.right_frame.isHidden())
+        self.assertFalse(page.center_frame.isHidden())
+        self.assertTrue(self.window.conversation.isHidden())
+        self.assertTrue(self.window.composer_wrap.isHidden())
+        self.assertEqual(page.fullscreen_button.text(), "退出全屏")
+
+        page.toggle_fullscreen()
+
+        self.assertFalse(page.graphics_expanded)
+        self.assertFalse(page.left_frame.isHidden())
+        self.assertFalse(page.right_frame.isHidden())
+        self.assertFalse(self.window.conversation.isHidden())
+        self.assertFalse(self.window.composer_wrap.isHidden())
+        self.assertEqual(page.fullscreen_button.text(), "全屏")
+
+    def test_layout_parameter_table_keeps_sequence_and_unit_columns_readable(self):
+        page = TubeLayoutPage({}, "AEU", {})
+        page.param_table.resize(620, 400)
+
+        page.restore_param_table_column_widths()
+
+        widths = [page.param_table.columnWidth(index) for index in range(4)]
+        self.assertGreaterEqual(widths[0], 48)
+        self.assertGreaterEqual(widths[1], 120)
+        self.assertGreaterEqual(widths[2], 180)
+        self.assertGreaterEqual(widths[3], 50)
+
+    def test_switching_stage_exits_preview_pane_fullscreen_cleanly(self):
+        self.window.session = DesignSession(
+            self.window.repository,
+            {"产品ID": "P1", "项目ID": "J1", "产品型式": "AEU"},
+            {"公称直径": {"value": "1000"}},
+        )
+        page = TubeLayoutPage({}, "AEU", {})
+        page.pane_fullscreen_requested.connect(self.window.set_preview_pane_fullscreen)
+        self.window.pages[1] = page
+        self.window.pages[3] = QLabel("轴向设计")
+        self.window._render_stage(1)
+        page.toggle_fullscreen()
+
+        self.window.open_stage(3)
+
+        self.assertFalse(self.window._preview_pane_fullscreen)
+        self.assertFalse(page.graphics_expanded)
+        self.assertEqual(page.fullscreen_button.text(), "全屏")
+        self.assertFalse(self.window.conversation.isHidden())
+        self.assertFalse(self.window.composer_wrap.isHidden())
 
 
 if __name__ == "__main__":

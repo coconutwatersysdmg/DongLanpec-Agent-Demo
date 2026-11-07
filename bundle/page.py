@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 
-from PyQt5.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPointF, QRectF, QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QFont, QIcon, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -205,6 +205,7 @@ class TubeLayoutPage(QWidget):
     state_changed = pyqtSignal(dict)
     status_message = pyqtSignal(str)
     selected_count_changed = pyqtSignal(int)
+    pane_fullscreen_requested = pyqtSignal(bool)
 
     def __init__(self, parameters: dict, product_type: str, defaults: dict | None = None,
                  center_distance_rows: list[list[str]] | None = None, sheet_form: dict | None = None,
@@ -246,6 +247,7 @@ class TubeLayoutPage(QWidget):
         self._cols_left: list[list[tuple[float, float]]] = []
         self._editors: dict[str, QWidget] = {}
         self._suppress_commit = False
+        self.graphics_expanded = False
         # 离屏自动验收时置 True：不弹模态框，改为在操作栏提示
         self.headless = False
         self._build_ui()
@@ -259,6 +261,7 @@ class TubeLayoutPage(QWidget):
         root.setSpacing(8)
 
         body = QHBoxLayout()
+        self.body_layout = body
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(10)
 
@@ -298,6 +301,7 @@ class TubeLayoutPage(QWidget):
 
         # 左：参数表
         left = QFrame()
+        self.left_frame = left
         left.setObjectName("layoutParamFrame")
         left.setMinimumWidth(360)
         left_layout = QVBoxLayout(left)
@@ -316,10 +320,10 @@ class TubeLayoutPage(QWidget):
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
-        self.param_table.setColumnWidth(0, 30)
+        self.param_table.setColumnWidth(0, 50)
         self.param_table.setColumnWidth(2, PATTERN_COLUMN_WIDTH)
-        self.param_table.setColumnWidth(3, 36)
-        header.setMinimumSectionSize(30)
+        self.param_table.setColumnWidth(3, 52)
+        header.setMinimumSectionSize(44)
         left_layout.addWidget(self.param_table, 1)
         self.lagan_summary = QLabel("拉杆标准要求数量-/已有数量0")
         self.lagan_summary.setStyleSheet("color:#222; padding:4px 6px;")
@@ -328,6 +332,7 @@ class TubeLayoutPage(QWidget):
 
         # 中：图形 + 操作栏
         center = QFrame()
+        self.center_frame = center
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(4, 4, 4, 4)
         center_layout.setSpacing(4)
@@ -364,6 +369,7 @@ class TubeLayoutPage(QWidget):
         )
         self.pipe_button.clicked.connect(lambda: self.recompute(reason="用户点击布管"))
         action_bar.addWidget(self.pipe_button)
+        self.fullscreen_button = None
         for text, slot in (("撤销", self.undo), ("重绘", self.rebuild_scene), ("全屏", self.toggle_fullscreen)):
             button = QPushButton(text)
             button.setCursor(Qt.PointingHandCursor)
@@ -373,6 +379,8 @@ class TubeLayoutPage(QWidget):
             )
             button.clicked.connect(slot)
             action_bar.addWidget(button)
+            if text == "全屏":
+                self.fullscreen_button = button
         action_bar.addStretch()
         self.selection_label = QLabel("未选中管孔")
         self.selection_label.setStyleSheet("color:#8f949c;")
@@ -382,6 +390,7 @@ class TubeLayoutPage(QWidget):
 
         # 右：管孔数量分布
         right = QFrame()
+        self.right_frame = right
         right.setMinimumWidth(340)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 4, 4, 4)
@@ -436,6 +445,27 @@ class TubeLayoutPage(QWidget):
         if obj is self.view and event.type() == QEvent.Resize:
             self._place_symmetry_check()
         return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self.restore_param_table_column_widths()
+
+    def restore_param_table_column_widths(self) -> None:
+        """按正式程序的比例恢复参数表列宽，并保证窄窗口下表头仍可读。"""
+        table = getattr(self, "param_table", None)
+        if table is None:
+            return
+        total = max(table.viewport().width(), 420)
+        sequence_width = 50
+        unit_width = 52
+        remaining = max(total - sequence_width - unit_width, 0)
+        # 值列需容纳“管程分程形式”示意图；同时给参数名保留至少 120px。
+        value_width = max(180, min(240, int(remaining * 0.52)))
+        if remaining - value_width < 120:
+            value_width = max(180, remaining - 120)
+        table.setColumnWidth(0, sequence_width)
+        table.setColumnWidth(2, value_width)
+        table.setColumnWidth(3, unit_width)
 
     def _place_symmetry_check(self) -> None:
         """勾选框贴在图形区右上角（正式程序 checkbox_container 同款位置）。"""
@@ -1934,12 +1964,26 @@ class TubeLayoutPage(QWidget):
         self.status_message.emit("请先选择要删除的管孔或元件")
 
     def toggle_fullscreen(self) -> None:
-        window = self.window()
-        if window.isFullScreen():
-            window.showNormal()
-        else:
-            window.showFullScreen()
+        """请求主窗口放大整个布管预览窗格，而非进入系统全屏。"""
+        self.set_pane_fullscreen(not self.graphics_expanded)
+
+    def set_pane_fullscreen(self, enabled: bool, notify: bool = True) -> None:
+        """放大预览窗格时只保留中间布管图；退出后恢复两侧表格。"""
+        self.graphics_expanded = bool(enabled)
+        self.left_frame.setVisible(not self.graphics_expanded)
+        self.right_frame.setVisible(not self.graphics_expanded)
+        self.body_layout.setStretch(0, 0 if self.graphics_expanded else 36)
+        self.body_layout.setStretch(1, 1 if self.graphics_expanded else 39)
+        self.body_layout.setStretch(2, 0 if self.graphics_expanded else 25)
+        if self.fullscreen_button is not None:
+            self.fullscreen_button.setText("退出全屏" if self.graphics_expanded else "全屏")
+        self.body_layout.invalidate()
+        self.body_layout.activate()
+        if notify:
+            self.pane_fullscreen_requested.emit(self.graphics_expanded)
         self.view.fit_all()
+        # 等待主窗口完成上下窗格切换后再适配一次。
+        QTimer.singleShot(0, self.view.fit_all)
 
     # ------------------------------------------------------ 校验与摘要
     def show_issues(self) -> None:

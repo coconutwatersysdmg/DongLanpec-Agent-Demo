@@ -1162,6 +1162,7 @@ class DesignWindow(QMainWindow):
         self._initial_stage = 0
         self.card: PreviewCard | None = None
         self.inline_card: PreviewCard | None = None
+        self._preview_pane_fullscreen = False
         self.worker = None
         self._worker_callback = None
         self._worker_cancelled = False
@@ -1315,6 +1316,7 @@ class DesignWindow(QMainWindow):
         main_layout.addWidget(self.splitter, 1)
 
         composer_wrap = QWidget()
+        self.composer_wrap = composer_wrap
         wrap_layout = QVBoxLayout(composer_wrap)
         wrap_layout.setContentsMargins(0, 8, 0, 0)
         wrap_layout.setSpacing(7)
@@ -1581,6 +1583,7 @@ class DesignWindow(QMainWindow):
         page.keep_requested.connect(lambda: self.keep_current("布管"))
         page.status_message.connect(self.notify)
         page.state_changed.connect(lambda _info: self._on_stage_edited("布管"))
+        page.pane_fullscreen_requested.connect(self.set_preview_pane_fullscreen)
         return page
 
     def _build_connection_page(self) -> TubeConnectionStage:
@@ -1635,6 +1638,8 @@ class DesignWindow(QMainWindow):
 
     def _clear_preview(self) -> None:
         """把当前预览卡片卸下，同时保住页面对象，避免随卡片一起被销毁。"""
+        if self._preview_pane_fullscreen:
+            self.set_preview_pane_fullscreen(False)
         if self.card is None:
             return
         page = self.card.page
@@ -1654,6 +1659,23 @@ class DesignWindow(QMainWindow):
         page.setParent(None)
         self.conversation.remove_widget(self.inline_card)
         self.inline_card = None
+
+    def set_preview_pane_fullscreen(self, enabled: bool) -> None:
+        """让整个上方设计预览窗格占满右侧工作区。"""
+        enabled = bool(enabled)
+        if not enabled and self.card is not None and isinstance(self.card.page, TubeLayoutPage):
+            self.card.page.set_pane_fullscreen(False, notify=False)
+        self._preview_pane_fullscreen = enabled
+        self.conversation.setVisible(not enabled)
+        self.composer_wrap.setVisible(not enabled)
+        if enabled:
+            self.preview_host.show()
+            self.splitter.setSizes([max(self.splitter.height(), 760), 0])
+        else:
+            self.conversation.show()
+            self.composer_wrap.show()
+            if self.preview_host.isVisible():
+                self._apply_default_split()
 
     def _render_stage(self, index: int) -> None:
         if self.session is None:
