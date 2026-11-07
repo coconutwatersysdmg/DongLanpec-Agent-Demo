@@ -43,23 +43,43 @@ class SessionTests(unittest.TestCase):
     def test_stage_names(self):
         self.assertEqual(STAGES, ("管板型式", "布管", "管-板连接", "轴向设计"))
 
-    def test_keep_order_enforced(self):
+    def test_any_tab_can_be_kept_without_prior_tab(self):
         session = self.make()
-        ok, reason = session.can_keep("布管")
-        self.assertFalse(ok)
-        self.assertIn("管板型式", reason)
-        session.mark_kept("管板型式", payload("管板型式"))
-        self.assertTrue(session.can_keep("布管")[0])
-        self.assertEqual(session.current_index, 1)
+        for stage in STAGES:
+            self.assertEqual(session.can_keep(stage), (True, ""))
+        session.mark_kept("轴向设计", payload("轴向设计"))
+        self.assertEqual(session.approved, [False, False, False, True])
+        self.assertIn("轴向设计", session.payloads)
 
-    def test_keep_invalidates_downstream(self):
+    def test_keep_navigates_forward_without_forcing_unkept_earlier_tab(self):
+        session = self.make()
+        session.current_index = 1
+
+        session.mark_kept("布管", payload("布管"))
+
+        self.assertEqual(session.approved, [False, True, False, False])
+        self.assertEqual(session.current_index, 2)
+
+    def test_rekeeping_one_tab_preserves_other_tabs(self):
         session = self.make()
         for stage in STAGES:
             session.mark_kept(stage, payload(stage))
         self.assertTrue(session.complete)
         session.mark_kept("管板型式", payload("管板型式"))
-        self.assertEqual(session.approved, [True, False, False, False])
+        self.assertEqual(session.approved, [True, True, True, True])
+        self.assertIn("布管", session.payloads)
+
+    def test_editing_one_tab_only_invalidates_that_tab(self):
+        session = self.make()
+        for stage in STAGES:
+            session.mark_kept(stage, payload(stage))
+
+        session.invalidate_stage("布管")
+
+        self.assertEqual(session.approved, [True, False, True, True])
         self.assertNotIn("布管", session.payloads)
+        self.assertIn("管-板连接", session.payloads)
+        self.assertIn("轴向设计", session.payloads)
 
     def test_save_requires_all_stages(self):
         session = self.make()

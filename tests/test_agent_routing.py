@@ -65,6 +65,16 @@ class AgentRoutingTests(unittest.TestCase):
         user_payload = json.loads(client._complete_json.call_args.args[1])
         self.assertEqual(user_payload["layout_state"]["plan_view"], "行+3 |o o|")
 
+    def test_agent_prompt_allows_bulk_outline_rods_without_artificial_limit(self):
+        client = DeepSeekClient(APIConfig(api_key="secret"))
+        client._complete_json = Mock(return_value={"reply": "已生成方案", "placements": []})
+
+        client.chat([], {}, "布管", "将最外轮廓换热管都变为拉杆", {"plan_view": "84 根"})
+
+        system_prompt = client._complete_json.call_args.args[0]
+        self.assertNotIn("单次最多 40 根", system_prompt)
+        self.assertIn('region:"outline"', system_prompt)
+
     def test_model_selected_tubes_survive_until_preview_card(self):
         self.window._show_hole_card = Mock()
         self.window._parse_hole_words = Mock(return_value=HoleOp(region="outline"))

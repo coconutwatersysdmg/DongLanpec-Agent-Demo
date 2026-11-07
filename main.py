@@ -1,4 +1,4 @@
-"""管束设计 Agent Demo 启动入口。
+"""管束设计 AI AGENT 启动入口。
 
 用法：
     python main.py                         正常启动图形界面
@@ -26,7 +26,7 @@ def _install_font(app):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="管束设计 Agent Demo")
+    parser = argparse.ArgumentParser(description="管束设计 AI AGENT")
     parser.add_argument("--screenshot", help="离屏渲染界面截图并保存到该路径，随后退出")
     parser.add_argument("--stage", type=int, default=None, help="截图前展开的 Tab 序号 0-3")
     parser.add_argument("--product", default=None, help="指定要载入的产品ID")

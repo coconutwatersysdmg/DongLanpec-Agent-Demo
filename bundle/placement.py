@@ -64,7 +64,11 @@ REGION_ALIASES = {
     "靠近壳壁": "near_shell",
     "靠壳壁": "near_shell",
     "近壳壁": "near_shell",
-    "最外圈": "near_shell",
+    "最外圈": "outline",
+    "最外轮廓": "outline",
+    "外轮廓": "outline",
+    "轮廓": "outline",
+    "outline": "outline",
     "near_shell": "near_shell",
     "均布": "uniform",
     "均分": "uniform",
@@ -90,6 +94,7 @@ REGION_ALIASES = {
 
 REGION_LABEL = {
     "edge_symmetric": "靠壳壁，按分程对称展开",
+    "outline": "布管外轮廓的全部管孔",
     "near_shell": "取最靠壳壁的一圈管孔",
     "uniform": "沿周向均布",
     "top": "取上方的管孔",
@@ -103,8 +108,8 @@ REGION_LABEL = {
 # 元件支持的位置规则；第一个是默认值。
 # 参照管数（见 ANCHORS）决定这里的“位置”指“一个管孔”还是“一对相邻管孔”。
 KIND_REGIONS = {
-    "rod": ("edge_symmetric", "near_shell", "uniform", "top", "bottom", "left", "right", "any"),
-    "free_rod": ("edge_symmetric", "near_shell", "uniform", "any"),
+    "rod": ("edge_symmetric", "outline", "near_shell", "uniform", "top", "bottom", "left", "right", "any"),
+    "free_rod": ("edge_symmetric", "outline", "near_shell", "uniform", "any"),
     "block_tube": ("uniform", "any", "near_shell", "top", "bottom"),
     "bypass": ("near_shell", "uniform", "top", "bottom", "left", "right", "any"),
     "center_baffle": ("uniform", "any", "top", "bottom"),
@@ -150,10 +155,9 @@ OCCUPYING_KINDS = {"rod", "free_rod", "block_tube"}
 # 因此不计入占用；只有真正替换换热管的元件才算。
 HOLE_OCCUPYING_KINDS = set(OCCUPYING_KINDS)
 
-# 单次方案的数量上限，防止模型给出离谱数字
+# 非占孔板件仍保留合理数量保护；拉杆/自由拉杆的物理上限是当前可用管孔数，
+# 不能在解析层提前截断，否则“把外轮廓 84 根全部换成拉杆”会被悄悄改成 64 根。
 KIND_LIMITS = {
-    "rod": 64,
-    "free_rod": 64,
     "block_tube": 64,
     "bypass": 24,
     "center_baffle": 48,
@@ -315,12 +319,14 @@ def parse_placements(raw_items, known_options: dict | None = None) -> tuple[list
         if kind is None:
             rejected.append(f"不认识的元件「{raw.get('kind') or raw.get('component') or raw.get('name')}」")
             continue
-        limit = KIND_LIMITS.get(kind, 64)
+        limit = KIND_LIMITS.get(kind)
         try:
             count = int(float(raw.get("count", raw.get("quantity", 1)) or 1))
         except (TypeError, ValueError):
             count = 1
-        count = max(1, min(count, limit))
+        count = max(1, count)
+        if limit is not None:
+            count = min(count, limit)
         region = normalize_region(raw.get("region") or raw.get("position") or raw.get("where"), kind)
 
         raw_options = raw.get("options") or raw.get("parameters") or {}
@@ -431,11 +437,6 @@ def pick_centers(pool, count: int, region: str) -> list[tuple[float, float]]:
         if scoped:
             candidates = scoped
     return _binned(candidates, count)
-
-
-# 单次能布的拉杆/自由拉杆根数上限。模型有时候会把“所有拉杆”理解成“布置几百根”，
-# 一次铺 492 根把管孔全占了（用户原话“这一堆拉杆，瞎吗”）。超过就截断并说明。
-ROD_LIMIT_PER_PLACEMENT = 40
 
 
 # ------------------------------------------------------- 参照管成对选取（挡板类）

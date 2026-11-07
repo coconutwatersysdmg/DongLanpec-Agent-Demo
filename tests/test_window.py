@@ -10,7 +10,9 @@ from PyQt5.QtWidgets import QApplication, QLabel
 
 from db.production import DatabaseUnavailable
 from models import STAGES
-from window import DesignWindow, MessageInput
+from session import DesignSession
+from bundle.stages import SheetFormStage, TubeConnectionStage
+from window import DesignWindow, MessageInput, PlanParamField
 
 
 class OfflineRepository:
@@ -23,6 +25,36 @@ class OfflineRepository:
 
     def list_products(self, limit=80):
         raise DatabaseUnavailable("无法连接正式数据库：Can't connect to MySQL server")
+
+
+class SuccessfulRepository:
+    """最小成功数据源：用来验证启动成功后不在对话里输出冗长摘要。"""
+
+    allow_write = False
+
+    def ping(self):
+        return True, "已连接"
+
+    def list_products(self, limit=80):
+        return [{"产品ID": "P1", "项目ID": "J1", "产品型式": "BEM"}]
+
+    def product(self, product_id):
+        return {"产品ID": product_id, "项目ID": "J1", "产品型式": "BEM"}
+
+    def upstream(self, product_id):
+        return {"公称直径": {"value": "1000"}}
+
+    def layout_params(self, product_id):
+        return {}
+
+    def layout_defaults(self, product_type):
+        return {}
+
+    def center_distance_table(self):
+        return []
+
+    def sheet_form(self, letter):
+        return []
 
 
 class WindowTests(unittest.TestCase):
@@ -44,10 +76,129 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(tuple(labels), STAGES)
         self.assertTrue(all(not button.isEnabled() for button in self.window.stage_buttons))
 
+    def test_all_tabs_are_available_once_design_session_exists(self):
+        self.window.session = DesignSession(
+            self.window.repository,
+            {"产品ID": "P1", "项目ID": "J1", "产品型式": "AEU"},
+            {"公称直径": {"value": "1000"}},
+        )
+
+        self.window._refresh_stage_buttons()
+
+        self.assertTrue(all(button.isEnabled() for button in self.window.stage_buttons))
+
+    def test_opening_later_tab_does_not_require_previous_tab_kept(self):
+        self.window.session = DesignSession(
+            self.window.repository,
+            {"产品ID": "P1", "项目ID": "J1", "产品型式": "AEU"},
+            {"公称直径": {"value": "1000"}},
+        )
+        self.window.pages[3] = QLabel("轴向设计草稿")
+
+        self.window.open_stage(3)
+
+        self.assertEqual(self.window.session.current_index, 3)
+        self.assertIsNotNone(self.window.card)
+
     def test_initial_screen_is_chat_style(self):
         self.assertEqual(len(self.window.chat_history), 1)
         self.assertEqual(self.window.chat_history[0]["role"], "assistant")
         self.assertTrue(self.window.prompt.isVisible() or self.window.prompt is not None)
+
+    def test_sidebar_uses_ai_agent_brand_without_demo_wording(self):
+        labels = [label.text() for label in self.window.sidebar.findChildren(QLabel)]
+        self.assertIn("AI AGENT", labels)
+        self.assertNotIn("Agent Demo", labels)
+        self.assertEqual(self.window.windowTitle(), "管束设计 AI AGENT")
+
+    def test_successful_start_does_not_append_database_summary(self):
+        window = DesignWindow(repository=SuccessfulRepository())
+        self.addCleanup(window.deleteLater)
+        before = len(window.chat_history)
+
+        window._boot_session()
+
+        self.assertIsNotNone(window.session)
+        self.assertEqual(len(window.chat_history), before)
+
+    def test_sheet_form_and_connection_render_in_chat_without_top_preview(self):
+        self.window.session = DesignSession(
+            self.window.repository,
+            {"产品ID": "P1", "项目ID": "J1", "产品型式": "AEU"},
+            {"公称直径": {"value": "1000"}},
+        )
+        self.window.pages[0] = SheetFormStage(None, "AEU", 1000)
+        self.window.pages[2] = TubeConnectionStage(None)
+
+        for index in (0, 2):
+            self.window._render_stage(index)
+            self.assertTrue(self.window.preview_host.isHidden())
+            self.assertIsNotNone(self.window.inline_card)
+            self.assertIn(self.window.inline_card, self.window.conversation.message_rows)
+
+    def test_layout_and_axial_keep_the_top_graphical_preview(self):
+        self.window.session = DesignSession(
+            self.window.repository,
+            {"产品ID": "P1", "项目ID": "J1", "产品型式": "AEU"},
+            {"公称直径": {"value": "1000"}},
+        )
+        self.window.pages[1] = QLabel("布管图形")
+        self.window.pages[3] = QLabel("轴向图形")
+
+        for index in (1, 3):
+            self.window._render_stage(index)
+            self.assertFalse(self.window.preview_host.isHidden())
+            self.assertIsNotNone(self.window.card)
+            self.assertIsNone(self.window.inline_card)
+
+    def test_connection_selectors_are_not_repeated_as_parameter_rows(self):
+        page = TubeConnectionStage(None)
+        row_names = [
+            page.table.item(row, 1).text()
+            for row in range(page.table.rowCount())
+            if page.table.item(row, 1) is not None
+        ]
+        self.assertNotIn("管板连接方式", row_names)
+        self.assertNotIn("管板类型", row_names)
+        self.assertEqual(set(page.selector_editors), {"管板连接方式", "管板类型"})
+
+    def test_connection_plate_type_uses_source_program_names_not_database_codes(self):
+        page = TubeConnectionStage(None, plate_type="0")
+        selector = page.selector_editors["管板类型"]
+        self.assertEqual(selector.currentText(), "整体管板")
+        self.assertEqual(page.to_payload()["管板类型"], "0")
+
+        selector.setCurrentText("复合管板")
+        page._on_edited("管板类型")
+
+        self.assertEqual(page.to_payload()["管板类型"], "1")
+
+    def test_keep_outputs_only_data_saved_success(self):
+        self.window.headless = True
+        self.window.session = DesignSession(
+            self.window.repository,
+            {"产品ID": "P1", "项目ID": "J1", "产品型式": "AEU"},
+            {"公称直径": {"value": "1000"}},
+        )
+        self.window.pages[0] = SheetFormStage(None, "AEU", 1000)
+        self.window.pages[1] = QLabel("布管图形")
+
+        self.window.keep_current("管板型式")
+
+        self.assertEqual(self.window.chat_history[-1]["content"], "数据保存成功")
+
+    def test_keep_does_not_emit_linkage_status_before_success(self):
+        window = DesignWindow(repository=SuccessfulRepository())
+        self.addCleanup(window.deleteLater)
+        window.headless = True
+        window._boot_session()
+        window.pages[1] = window._build_layout_page()
+        before = len(window.chat_history)
+
+        window.keep_current("管板型式")
+
+        self.assertEqual(len(window.chat_history), before + 1)
+        self.assertEqual(window.chat_history[-1]["content"], "数据保存成功")
 
     def test_user_message_is_right_aligned(self):
         self.window.append_chat("user", "换热管中心距改成34毫米")
@@ -91,6 +242,21 @@ class WindowTests(unittest.TestCase):
         self.window.clear_chat()
         self.assertEqual(len(self.window.chat_history), 1)
         self.assertEqual(self.window.chat_history[0]["role"], "assistant")
+
+    def test_plan_form_combo_is_wide_enough_for_full_option(self):
+        field = PlanParamField({
+            "name": "拉杆形式",
+            "short": "形式",
+            "kind": "choice",
+            "options": ["螺纹拉杆", "焊接拉杆"],
+            "value": "螺纹拉杆",
+            "form": True,
+        }, parent=self.window)
+        combo = field.editor
+        widest = max(combo.fontMetrics().horizontalAdvance(combo.itemText(i))
+                     for i in range(combo.count()))
+        # 右对齐 lineEdit、下拉箭头和样式内边距都要留空间；否则会从左边裁掉“螺”。
+        self.assertGreaterEqual(combo.minimumWidth(), widest + 72)
 
 
 if __name__ == "__main__":

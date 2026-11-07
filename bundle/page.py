@@ -2218,17 +2218,19 @@ class TubeLayoutPage(QWidget):
 
         # 拉杆 / 自由拉杆：1 个种子管 → judge_linkage（对称分布）/ 单轴镜像展开
         if kind in {"rod", "free_rod"}:
+            # “外轮廓全部换成拉杆”是一个整体操作：外轮廓已经是程序按当前布管结果
+            # 算出的精确集合，直接全部返回，不再压成一个种子管，也不设 Demo 人工上限。
+            if item.region == "outline":
+                out["tubes"] = list(self._outline_ring(pool, 1))
+                out["note"] = "布管外轮廓全部管孔"
+                return out
             # count 是“要布置的根数”；一个种子管经 judge_linkage 会铺满 4 个象限，
             # 所以种子数由展开结果凑到 count 为止（至少 1 个种子，源程序里
-            # 选 1 根就自动补成 4 根）。单次根数有上限，避免“所有拉杆”被理解成几百根。
-            from .placement import ROD_LIMIT_PER_PLACEMENT
-
-            target = max(1, min(int(item.count or 1), ROD_LIMIT_PER_PLACEMENT))
+            # 选 1 根就自动补成 4 根）。最多只能占用当前真实可用管孔，不再另设 40 根上限。
+            target = max(1, min(int(item.count or 1), len(pool)))
             # 镜像经常落到同一组（4 个点互相镜像），种子要多给一些才凑得够根数；
-            # 上限 60 个种子，避免“所有拉杆”把整张图铺满。
-            seeds = pick_centers(
-                pool, min(len(pool), min(target * 2 + 4, 60)), item.region
-            )
+            # 遍历范围只受当前真实管孔池限制，确保一次方案可以完成全部目标。
+            seeds = pick_centers(pool, min(len(pool), target * 2 + 4), item.region)
             picked: list = []
             for seed in seeds:
                 group = [
@@ -2645,6 +2647,8 @@ class TubeLayoutPage(QWidget):
                 label = f"{self._impingement_form(item)}防冲板"
             # 挡管/挡板按“一对参照管 → 一块”，勾对称分布时一对会补成两对，块数按实际对数给
             shown_count = item.count
+            if item.kind in {"rod", "free_rod"} and tubes:
+                shown_count = len(tubes)
             if item.kind in {"center_baffle", "block_tube"} and resolution.get("pairs"):
                 shown_count = len(resolution["pairs"])
             rows.append({

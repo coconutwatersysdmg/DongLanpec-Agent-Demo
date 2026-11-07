@@ -1,11 +1,7 @@
-"""四阶段管束设计会话：保留顺序、下游失效、最终一次事务写库。
+"""四个可独立查看/保留的管束设计 Tab，全部确认后一次事务写库。
 
-状态机与正式程序 Tab 一致：管板型式 → 布管 → 管-板连接 → 轴向设计。
-- 每个 Tab 只有通过校验才能“保留”，保留后自动进入下一个 Tab。
-- 修改已经保留的 Tab，会把它之后的草稿全部作废（approved 置 False 并清空 payload），
-  避免前后参数矛盾。
-- 四个 Tab 全部保留后，才允许调用正式保存逻辑（ProductionRepository.save_design），
-  且写库在单个事务内完成，失败回滚。
+源程序的四个 Tab 没有前置解锁关系：用户可任意切换、任意顺序保存。Demo 的“保留”
+只表示该页已经人工确认；修改某页只撤销该页自己的确认，不会清空其它页面。
 """
 from __future__ import annotations
 
@@ -73,32 +69,29 @@ class DesignSession(QObject):
         index = STAGES.index(stage)
         self.payloads[stage] = deepcopy(payload)
         self.approved[index] = True
-        # 下游作废：保留上游后，后续 Tab 的草稿必须重算
-        for later in range(index + 1, len(STAGES)):
-            if self.approved[later]:
-                self.dirty_reason = f"{stage} 已修改，{STAGES[later]} 需要重新计算"
-            self.approved[later] = False
-            self.payloads.pop(STAGES[later], None)
         self.saved_result = None
         self.saved_payload = None
-        if index < len(STAGES) - 1:
-            self.current_index = index + 1
+        # 只是按界面位置向后导航，不用“前面是否已保留”决定去向；走到末页后
+        # 再回到仍未检查的页面。任何 Tab 始终都能直接点开。
+        pending = [i for i in range(index + 1, len(STAGES)) if not self.approved[i]]
+        if not pending:
+            pending = [i for i in range(0, index) if not self.approved[i]]
+        if pending:
+            self.current_index = pending[0]
         self.stage_changed.emit(self.current_index)
 
-    def invalidate_from(self, stage: str) -> None:
+    def invalidate_stage(self, stage: str) -> None:
+        """页面内容被修改时，只撤销这一页自己的人工确认。"""
         index = STAGES.index(stage)
-        for later in range(index, len(STAGES)):
-            self.approved[later] = False
-            self.payloads.pop(STAGES[later], None)
+        self.approved[index] = False
+        self.payloads.pop(stage, None)
         self.saved_result = None
         self.current_index = index
         self.stage_changed.emit(self.current_index)
 
     def can_keep(self, stage: str) -> tuple[bool, str]:
-        index = STAGES.index(stage)
-        for earlier in range(index):
-            if not self.approved[earlier]:
-                return False, f"请先完成并保留“{STAGES[earlier]}”"
+        if stage not in STAGES:
+            return False, f"未知页面：{stage}"
         return True, ""
 
     # ------------------------------------------------------------------ 保存

@@ -944,7 +944,7 @@ def main() -> int:
         "、".join(f"{k}→{STAGES[v]}" for k, v in picks.items()),
     )
 
-    # 27.1 保留确认弹窗：只说“进入下一阶段”，按钮是 是 / 否
+    # 27.1 保留确认弹窗：不制造 Tab 前置关系，按钮是 是 / 否
     dialog = window._build_keep_box("管板型式")
     texts = [dialog.yes_button.text(), dialog.no_button.text()]
     body = " ".join(
@@ -953,8 +953,8 @@ def main() -> int:
     dialog.deleteLater()
     check(
         texts == ["是", "否"] and "Tab" not in body and "tab" not in body
-        and "进入下一阶段" in body,
-        "27.1 保留确认弹窗不再提 Tab，按钮是 是 / 否",
+        and "继续检查其他页面" in body,
+        "27.1 保留确认弹窗不制造页面前置关系，按钮是 是 / 否",
         f"按钮 {texts}，正文“{body.strip()}”",
     )
 
@@ -1249,22 +1249,27 @@ def main() -> int:
         f"拉杆 {rods_before_conv}→0，管孔 {holes_before_conv}→{holes_after_conv}",
     )
 
-    # 41. 拉杆单次数量上限：模型把“所有拉杆”当成布置几百根时兜住
-    from bundle.placement import PlacementItem, ROD_LIMIT_PER_PLACEMENT
+    # 41. 外轮廓拉杆可一次全部布置，不受 Demo 人工数量上限影响
+    from bundle.placement import PlacementItem
 
-    huge = page._resolve_item(PlacementItem("rod", 492, "any", {}))
+    outline = page._outline_ring(page.current_centers(), 1)
+    huge = page._resolve_item(PlacementItem("rod", len(outline), "outline", {}))
     check(
-        len(huge["tubes"]) <= ROD_LIMIT_PER_PLACEMENT + 4,
-        "41 单次拉杆数量有上限，不会一次铺满整张图",
-        f"要求 492 根 → 实际解析 {len(huge['tubes'])} 根（上限 {ROD_LIMIT_PER_PLACEMENT}）",
+        len(huge["tubes"]) == len(outline),
+        "41 外轮廓拉杆一次全部布置",
+        f"外轮廓 {len(outline)} 根 → 方案解析 {len(huge['tubes'])} 根",
     )
 
-    # 20. 前序修改 → 下游失效
+    # 20. 四个 Tab 独立：修改一页只撤销本页，不影响其它页
+    other_before = list(window.session.approved[1:])
     window.session.current_index = 0
     window._render_stage(0)
     window._on_stage_edited("管板型式")
-    check(not any(window.session.approved[1:]),
-          "20 修改前序 Tab 后下游草稿自动失效", str(window.session.approved))
+    check(
+        not window.session.approved[0] and window.session.approved[1:] == other_before,
+        "20 修改一个 Tab 只撤销本页确认，其它 Tab 保持原状态",
+        str(window.session.approved),
+    )
 
     # 21. 原项目未被修改
     check(True, "21 Demo 未导入/未修改原 DongLanpec 目录", "仅读取数据库与静态资源副本")

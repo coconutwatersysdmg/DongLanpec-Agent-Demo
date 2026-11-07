@@ -1,7 +1,9 @@
 import math
 import unittest
+from types import SimpleNamespace
 
 from bundle import placement
+from bundle.page import TubeLayoutPage
 
 
 def _ring_pool():
@@ -36,8 +38,31 @@ class PlacementParseTests(unittest.TestCase):
         self.assertTrue(rejected)
 
     def test_count_is_clamped_to_limit(self):
-        items, _ = placement.parse_placements([{"kind": "拉杆", "count": 9999}])
-        self.assertEqual(items[0].count, placement.KIND_LIMITS["rod"])
+        items, _ = placement.parse_placements([{"kind": "旁路挡板", "count": 9999}])
+        self.assertEqual(items[0].count, placement.KIND_LIMITS["bypass"])
+
+    def test_all_outline_rods_are_not_clamped_by_demo_limit(self):
+        items, rejected = placement.parse_placements([
+            {"kind": "拉杆", "count": 84, "region": "最外轮廓"},
+        ])
+        self.assertEqual(rejected, [])
+        self.assertEqual(items[0].count, 84)
+        self.assertEqual(items[0].region, "outline")
+
+    def test_outline_rod_plan_resolves_every_outline_hole_at_once(self):
+        pool = [(float(index), float(index % 7)) for index in range(84)]
+        fake_page = SimpleNamespace(
+            result=object(),
+            current_centers=lambda: list(pool),
+            _outline_ring=lambda values, layers=1: list(values),
+            _linkage_expand=lambda values, available=None: list(values),
+        )
+        item = placement.PlacementItem("rod", 84, "outline", {})
+
+        result = TubeLayoutPage._resolve_item(fake_page, item, pool)
+
+        self.assertEqual(len(result["tubes"]), 84)
+        self.assertEqual(set(result["tubes"]), set(pool))
 
     def test_region_falls_back_to_supported_one(self):
         items, _ = placement.parse_placements([{"kind": "旁路挡板", "count": 2, "region": "上方"}])

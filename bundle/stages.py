@@ -39,6 +39,8 @@ TUBE_CONNECTION_MODES = (
     "内孔焊接头形式",
 )
 PLATE_TYPES = (("0", "整体管板"), ("1", "复合管板"))
+PLATE_TYPE_LABELS = dict(PLATE_TYPES)
+PLATE_TYPE_CODES = {label: code for code, label in PLATE_TYPES}
 PLATE_LETTERS = ("a", "b", "c", "d", "e", "f")
 
 
@@ -100,6 +102,8 @@ def _number(value, default=0.0) -> float:
 
 class StagePage(QWidget):
     SHOW_SCENE = True  # 是否在示意图下方再画结构简图（管板型式页只用元件库示意图）
+    SHOW_GRAPHICS = True
+    SELECTOR_FIELDS: tuple[str, ...] = ()
     keep_requested = pyqtSignal()
     parameters_changed = pyqtSignal(dict)
 
@@ -126,6 +130,17 @@ class StagePage(QWidget):
         head.addWidget(hint)
         root.addLayout(head)
 
+        # 源程序中用于选择型式的字段不是普通参数行。在 Agent 的
+        # 对话审核卡中单独放在选择区，避免在参数表里重复。
+        self.selector_host = QFrame()
+        self.selector_host.setObjectName("stageSelectorHost")
+        self.selector_layout = QHBoxLayout(self.selector_host)
+        self.selector_layout.setContentsMargins(0, 0, 0, 0)
+        self.selector_layout.setSpacing(10)
+        self.selector_editors: dict[str, QWidget] = {}
+        self.selector_host.hide()
+        root.addWidget(self.selector_host)
+
         body = QHBoxLayout()
         body.setSpacing(10)
         self.table = QTableWidget(0, 4)
@@ -147,6 +162,7 @@ class StagePage(QWidget):
         body.addWidget(self.table, 42)
 
         preview = QFrame()
+        self.preview_panel = preview
         preview.setStyleSheet("QFrame{background:#fbfbfa;border:1px solid #ececea;border-radius:8px;}")
         preview_layout = QVBoxLayout(preview)
         preview_layout.setContentsMargins(8, 8, 8, 8)
@@ -163,6 +179,7 @@ class StagePage(QWidget):
         self.view.setVisible(self.SHOW_SCENE)
         preview_layout.addWidget(self.view, 2)
         body.addWidget(preview, 58)
+        preview.setVisible(self.SHOW_GRAPHICS)
         root.addLayout(body, 1)
 
         self.issue_label = QLabel("")
@@ -198,9 +215,32 @@ class StagePage(QWidget):
             if widget is not None:
                 table.removeCellWidget(row, 2)
                 widget.deleteLater()
-        table.setRowCount(len(self.defs))
+        while self.selector_layout.count():
+            item = self.selector_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.selector_editors.clear()
+        table_defs = [definition for definition in self.defs if definition.name not in self.SELECTOR_FIELDS]
+        table.setRowCount(len(table_defs))
         self._editors.clear()
-        for row, definition in enumerate(self.defs):
+        for definition in self.defs:
+            if definition.name not in self.SELECTOR_FIELDS:
+                continue
+            label = QLabel(definition.name)
+            label.setStyleSheet("font-weight:600;color:#3f444c;")
+            editor = self._make_editor(definition)
+            editor.setMinimumWidth(180)
+            self.selector_layout.addWidget(label)
+            self.selector_layout.addWidget(editor)
+            self._editors[definition.name] = editor
+            self.selector_editors[definition.name] = editor
+        self.selector_layout.addStretch()
+        self.selector_host.setVisible(bool(self.selector_editors))
+
+        self._table_rows: dict[str, int] = {}
+        for row, definition in enumerate(table_defs):
+            self._table_rows[definition.name] = row
             seq = QTableWidgetItem(str(row + 1))
             seq.setTextAlignment(Qt.AlignCenter)
             seq.setFlags(Qt.ItemIsEnabled)
@@ -288,7 +328,14 @@ class StagePage(QWidget):
 
     def set_issues(self, issues: list[dict]) -> None:
         self.issues = issues
-        for row, definition in enumerate(self.defs):
+        for definition in self.defs:
+            row = self._table_rows.get(definition.name)
+            if row is None:
+                editor = self._editors.get(definition.name)
+                issue = next((x for x in issues if x.get("field") == definition.name), None)
+                if editor is not None:
+                    editor.setToolTip(issue.get("message", "") if issue else "")
+                continue
             item = self.table.item(row, 2)
             if item is None:
                 continue
@@ -393,6 +440,8 @@ class SheetFormStage(StagePage):
     HINT = "管板类型与结构尺寸来自元件库.管板形式表；公称直径取自前序模块已保存的数据。"
     # 正式程序的管板型式页只有“形式示意图 + 参数”，没有额外的结构圆
     SHOW_SCENE = False
+    SHOW_GRAPHICS = False
+    SELECTOR_FIELDS = ("管板类型",)
 
     def __init__(self, repository=None, product_type: str = "AEU", dn: float = 1000.0,
                  r1: float = 12.0, parent=None):
@@ -487,6 +536,8 @@ class TubeConnectionStage(StagePage):
     HINT = "连接方式与管孔结构参数来自元件库.管板连接表；示意图为正式程序原图。"
     # 正式程序该页只有“原图 + 参数”，不自绘剖面图
     SHOW_SCENE = False
+    SHOW_GRAPHICS = False
+    SELECTOR_FIELDS = ("管板连接方式", "管板类型")
 
     def __init__(self, repository=None, mode: str | None = None, plate_type: str = "0", parent=None):
         self.repository = repository
@@ -517,7 +568,13 @@ class TubeConnectionStage(StagePage):
                 rows = []
         defs = [
             ParamDef("管板连接方式", mode, "", "combo", TUBE_CONNECTION_MODES),
-            ParamDef("管板类型", self.plate_type, "", "combo", ("0", "1")),
+            ParamDef(
+                "管板类型",
+                PLATE_TYPE_LABELS.get(self.plate_type, self.plate_type),
+                "",
+                "combo",
+                tuple(PLATE_TYPE_LABELS.values()),
+            ),
         ]
         for row in rows:
             defs.append(ParamDef(str(row["参数名"]), row["参数值"], "mm", "number"))
@@ -530,7 +587,7 @@ class TubeConnectionStage(StagePage):
 
     def _paint_note(self) -> None:
         self.table.setToolTip(
-            "管板类型 0=整体管板，1=复合管板；切换后参数按元件库.管板连接表重新装载。"
+            "切换管板类型后，参数按元件库.管板连接表重新装载。"
         )
 
     def _on_edited(self, name: str) -> None:
@@ -539,7 +596,8 @@ class TubeConnectionStage(StagePage):
             self.parameters_changed.emit(self.values())
             return
         if name == "管板类型":
-            self.load_mode(self.mode, self._editor_value(name))
+            selected = self._editor_value(name)
+            self.load_mode(self.mode, PLATE_TYPE_CODES.get(selected, selected))
             self.parameters_changed.emit(self.values())
             return
         super()._on_edited(name)
@@ -569,11 +627,12 @@ class TubeConnectionStage(StagePage):
 
     def to_payload(self) -> dict:
         values = self.values()
-        image_name = "复合管板.png" if values.get("管板类型") == "1" else "整体管板.png"
+        plate_type = PLATE_TYPE_CODES.get(values.get("管板类型", ""), self.plate_type)
+        image_name = "复合管板.png" if plate_type == "1" else "整体管板.png"
         return {
             "parameters": {k: v for k, v in values.items() if k not in {"管板连接方式", "管板类型"}},
             "方式": values.get("管板连接方式", ""),
-            "管板类型": values.get("管板类型", "0"),
+            "管板类型": plate_type,
             "image": (STATIC / "tube_sheet" / image_name).as_posix(),
         }
 

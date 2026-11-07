@@ -457,9 +457,15 @@ class PlanParamField(QWidget):
         elif self._kind == "choice" and spec.get("options"):
             combo = RightAlignedComboBox()
             combo.setObjectName("planCellCombo")
-            combo.setMinimumWidth(112)
             for option in spec.get("options") or []:
                 combo.addItem(str(option), str(option))
+            widest = max(
+                (combo.fontMetrics().horizontalAdvance(combo.itemText(i))
+                 for i in range(combo.count())),
+                default=0,
+            )
+            # 右对齐文字还要给下拉箭头和两层样式内边距留空间；固定 112px 会裁掉首字。
+            combo.setMinimumWidth(max(136, widest + 72))
             index = combo.findData(value)
             if index < 0 and value:
                 combo.addItem(value, value)
@@ -1155,6 +1161,7 @@ class DesignWindow(QMainWindow):
         self.pages: dict[int, QWidget] = {}
         self._initial_stage = 0
         self.card: PreviewCard | None = None
+        self.inline_card: PreviewCard | None = None
         self.worker = None
         self._worker_callback = None
         self._worker_cancelled = False
@@ -1165,7 +1172,7 @@ class DesignWindow(QMainWindow):
         self.db_status = "未连接"
         # 离屏截图/自动验收用：跳过模态弹窗，并且绝不真正写库
         self.headless = False
-        self.setWindowTitle("管束设计 Agent")
+        self.setWindowTitle("管束设计 AI AGENT")
         self.setFont(QFont("Microsoft YaHei UI", 10))
         # 窗口铺满可用桌面：对话是主界面，越大越好（启动时还会 showMaximized）
         screen = QApplication.primaryScreen()
@@ -1214,7 +1221,7 @@ class DesignWindow(QMainWindow):
         brand = QLabel("管束设计")
         brand.setObjectName("sidebarTitle")
         sidebar_layout.addWidget(brand)
-        subtitle = QLabel("Agent Demo")
+        subtitle = QLabel("AI AGENT")
         subtitle.setObjectName("sidebarSubtitle")
         sidebar_layout.addWidget(subtitle)
         sidebar_layout.addSpacing(16)
@@ -1450,7 +1457,6 @@ class DesignWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 启动流程
     def start_design(self):
-        self.append_chat("user", "开始管束设计")
         self._boot_session()
 
     def _boot_session(self, product_id: str | None = None):
@@ -1486,8 +1492,8 @@ class DesignWindow(QMainWindow):
         self.session = DesignSession(self.repository, product, upstream, self)
         self.session.stage_changed.connect(self._on_stage_changed)
         self.pages.clear()
-        self.conversation.remove_widget(self.card)
-        self.card = None
+        self._clear_preview()
+        self._clear_inline_card()
         self.config_rows = config_rows
         self.sheet_rows = sheet_rows
         self.defaults = defaults
@@ -1502,21 +1508,6 @@ class DesignWindow(QMainWindow):
         # 其余型式停在“布管”（`self.header.setCurrentIndex(0/1)`）
         self._initial_stage = self._pick_initial_stage()
         self._render_stage(self._initial_stage)
-        summary = [
-            f"已接入正式数据库：{self.session.header_text()}",
-            f"项目ID {self.session.project_id or '（库中为空）'}，产品型式 {self.session.product_type}",
-            f"布管参数：数据库已有 {len([v for v in params.values() if str(v.get('value', '')).strip()])} 项，"
-            f"其余按 {product['产品型式']} 的正式默认表补齐",
-            f"管板型式已按 {sheet_payload.get('管板类型', 'a')} 型生成，布管限定圆 DL="
-            f"{sheet_payload.get('布管限定圆 DL')}",
-        ]
-        first_stage = STAGES[self._initial_stage]
-        self.append_chat(
-            "assistant",
-            "\n".join(summary)
-            + f"\n\n当前停在“{first_stage}”（{self.session.product_type} 的管束从这里开始），"
-            "检查无误后点“保留”。",
-        )
 
     def _pick_initial_stage(self) -> int:
         """正式程序 `My_Piping` 的初始 Tab：BEM/NEN/AEM/NEN(H) → 管板型式，其余 → 布管。"""
@@ -1654,17 +1645,33 @@ class DesignWindow(QMainWindow):
         self.card.deleteLater()
         self.card = None
 
+    def _clear_inline_card(self) -> None:
+        """移除对话中的参数审核卡，但保留页面对象供来回切换。"""
+        if self.inline_card is None:
+            return
+        page = self.inline_card.page
+        self.inline_card.layout().removeWidget(page)
+        page.setParent(None)
+        self.conversation.remove_widget(self.inline_card)
+        self.inline_card = None
+
     def _render_stage(self, index: int) -> None:
         if self.session is None:
             return
         page = self._ensure_page(index)
         self._clear_preview()
+        self._clear_inline_card()
         stage = STAGES[index]
-        self.card = PreviewCard(stage, page, approved=self.session.approved[index])
-        self.preview_layout.addWidget(self.card, 1)
-        if self.preview_host.isHidden():
-            self.preview_host.show()
-            self._apply_default_split()
+        if index in {0, 2}:
+            self.preview_host.hide()
+            self.inline_card = PreviewCard(stage, page, approved=self.session.approved[index])
+            self.conversation.append_widget(self.inline_card)
+        else:
+            self.card = PreviewCard(stage, page, approved=self.session.approved[index])
+            self.preview_layout.addWidget(self.card, 1)
+            if self.preview_host.isHidden():
+                self.preview_host.show()
+                self._apply_default_split()
         self.session.current_index = index
         self._refresh_stage_buttons()
 
@@ -1677,12 +1684,9 @@ class DesignWindow(QMainWindow):
                 button.setEnabled(False)
                 button.setStyleSheet("")
             return
-        frontier = self.session.next_unapproved
-        if frontier is None:
-            frontier = len(STAGES)
-        reachable = max(frontier, getattr(self, "_initial_stage", 0))
         for index, button in enumerate(self.stage_buttons):
-            button.setEnabled(index <= reachable)
+            # 与源程序 QTabWidget 一致：会话建立后四个 Tab 始终都能直接进入。
+            button.setEnabled(True)
             if index == self.session.current_index:
                 button.setStyleSheet(
                     "background:#eaf1fe;color:#2458b8;border:none;border-radius:8px;"
@@ -1703,24 +1707,21 @@ class DesignWindow(QMainWindow):
         if self.session is None:
             self.append_chat("assistant", "请先点击“开始管束设计”。")
             return
-        # 该型式的起始阶段允许先看（正式程序四颗 Tab 本来就随便点），
-        # 但要往后走仍得先保留前面的阶段
-        if index > 0 and not self.session.approved[index - 1] and index > self._initial_stage:
-            self.append_chat("assistant", f"请先保留“{STAGES[index - 1]}”，再进入“{STAGES[index]}”。")
+        if not 0 <= index < len(STAGES):
             return
         self._render_stage(index)
 
     def _on_stage_edited(self, stage: str) -> None:
-        """已保留的 Tab 被修改 → 后续草稿作废并重算。"""
+        """已保留页面被修改时，只撤销本页确认；其它 Tab 仍可直接使用。"""
         if self.session is None:
             return
         index = STAGES.index(stage)
         if not self.session.approved[index]:
             return
-        self.session.invalidate_from(stage)
+        self.session.invalidate_stage(stage)
         self.append_chat(
             "assistant",
-            f"检测到“{stage}”已修改，后续阶段的草稿已自动作废，需要重新检查并保留。",
+            f"检测到“{stage}”已修改，本页需要重新检查并保留。",
         )
         self._refresh_stage_buttons()
 
@@ -1754,11 +1755,11 @@ class DesignWindow(QMainWindow):
                 return
         payload = page.to_payload()
         self.session.mark_kept(stage, payload)
-        self.append_chat("assistant", f"已保留“{stage}”（尚未写库）。")
         self._sync_downstream(stage)
         if self.session.complete:
             self.final_save()
             return
+        self.append_chat("assistant", "数据保存成功")
         self._render_stage(self.session.current_index)
 
     def _build_keep_box(self, stage: str):
@@ -1768,7 +1769,7 @@ class DesignWindow(QMainWindow):
         return ConfirmDialog(
             "确认保留",
             f"确认保留“{stage}”的当前内容吗？",
-            "保留后进入下一阶段。",
+            "保留后可继续检查其他页面。",
             parent=self,
         )
 
@@ -1786,7 +1787,8 @@ class DesignWindow(QMainWindow):
                 layout_page.set_parameter(
                     "布管限定圆 DL", linkage["布管限定圆 DL"], "联动计算", run_linkage=False
                 )
-                layout_page.recompute(reason="管板型式已保留，布管按新 DL 重算")
+                # 保留时只给用户一条“数据保存成功”；联动重算在后台完成。
+                layout_page.recompute(reason="")
         elif stage == "布管":
             axial = self.pages.get(3)
             layout_payload = self.session.payloads.get("布管", {})
@@ -1845,7 +1847,7 @@ class DesignWindow(QMainWindow):
             return
         self.append_chat(
             "assistant",
-            f"已写入正式数据库：产品 {self.session.product_id}，执行 {result.get('statements')} 条语句，事务已提交。",
+            "数据保存成功",
         )
         self._refresh_stage_buttons()
 
@@ -2173,7 +2175,9 @@ class DesignWindow(QMainWindow):
 
             if "外围" in compact or "对称" in compact:
                 region = "edge_symmetric"
-            elif "壳壁" in compact or "最外" in compact or "外圈" in compact:
+            elif "最外" in compact or "外圈" in compact or "轮廓" in compact:
+                region = "outline"
+            elif "壳壁" in compact:
                 region = "near_shell"
             elif "上方" in compact or "顶部" in compact or "顶上" in compact:
                 region = "top"
@@ -2279,10 +2283,7 @@ class DesignWindow(QMainWindow):
             if stage not in STAGES or parameter not in CANONICAL_FIELDS.get(stage, set()):
                 rejected.append(f"{stage}｜{parameter}：不属于该阶段的参数")
                 continue
-            page = self.pages.get(STAGES.index(stage))
-            if page is None:
-                rejected.append(f"{stage}｜{parameter}：该阶段尚未生成草稿")
-                continue
+            page = self._ensure_page(STAGES.index(stage))
             try:
                 if isinstance(page, TubeLayoutPage):
                     page.set_parameter(parameter, action.get("value"), "AI 对话修改")
@@ -2359,11 +2360,8 @@ class DesignWindow(QMainWindow):
         """把方案渲染成卡片；图形此时还没有任何改动。"""
         page = self.pages.get(1)
         if not isinstance(page, TubeLayoutPage):
-            if self.session is None or not self.session.approved[0]:
-                self.append_chat(
-                    "assistant",
-                    "布置方案需要布管页：请先保留“管板型式”，进入“布管”后再确认这版方案。",
-                )
+            if self.session is None:
+                self.append_chat("assistant", "请先点击“开始管束设计”。")
                 return
             page = self._ensure_page(1)
         preview = page.preview_placement(items)
@@ -2386,12 +2384,11 @@ class DesignWindow(QMainWindow):
         card.mark_applied(result)
         if not result.get("ok"):
             return
-        # 布置改动了布管内容：已保留的状态要按正式流程作废后续 Tab
+        # 布置改动了布管内容：只撤销“布管”本页的已保留状态。
         self._on_stage_edited("布管")
         # 让用户直接看到图形结果：当前不在布管页就切过去
         if self.session is not None and self.session.current_index != 1:
-            if self.session.approved[0]:
-                self.open_stage(1)
+            self.open_stage(1)
         elif self.card is not None:
             # 图形就在上方固定预览区，把下方对话滚到底即可
             self.conversation._scroll_to_bottom()
@@ -2412,11 +2409,8 @@ class DesignWindow(QMainWindow):
     def _show_hole_card(self, ops) -> None:
         page = self.pages.get(1)
         if not isinstance(page, TubeLayoutPage):
-            if self.session is None or not self.session.approved[0]:
-                self.append_chat(
-                    "assistant",
-                    "换热管增删需要布管页：请先保留“管板型式”，进入“布管”后再确认。",
-                )
+            if self.session is None:
+                self.append_chat("assistant", "请先点击“开始管束设计”。")
                 return
             page = self._ensure_page(1)
         preview = page.preview_hole_ops(ops)
@@ -2437,8 +2431,7 @@ class DesignWindow(QMainWindow):
             return
         self._on_stage_edited("布管")
         if self.session is not None and self.session.current_index != 1:
-            if self.session.approved[0]:
-                self.open_stage(1)
+            self.open_stage(1)
         elif self.card is not None:
             self.conversation._scroll_to_bottom()
         self.notify(
@@ -2454,7 +2447,12 @@ class DesignWindow(QMainWindow):
 
     # ---------------- 界面操作（用户能点的按钮，Agent 都能按）----------------
     def _ui_action_page(self) -> TubeLayoutPage | None:
-        return self._placement_page()
+        page = self._placement_page()
+        if page is None and self.session is not None:
+            candidate = self._ensure_page(1)
+            if isinstance(candidate, TubeLayoutPage):
+                page = candidate
+        return page
 
     def _run_ui_actions(self, actions) -> list[str]:
         """执行一串界面动作；返回给人看的执行说明（逐条）。"""
@@ -2476,7 +2474,7 @@ class DesignWindow(QMainWindow):
                 continue
             if name == "select_all":
                 if page is None:
-                    notes.append("还没有布管图，先保留“管板型式”进入布管。")
+                    notes.append("当前还没有布管图。")
                 else:
                     centers = page.current_centers()
                     page.select_centers(centers)
@@ -2484,7 +2482,7 @@ class DesignWindow(QMainWindow):
                 continue
             if name == "select_region":
                 if page is None:
-                    notes.append("还没有布管图，先保留“管板型式”进入布管。")
+                    notes.append("当前还没有布管图。")
                 else:
                     centers = page.select_region(region or "near_shell", rows, count)
                     where = HOLE_REGIONS.get(region or "near_shell", region or "指定区域")
@@ -2492,7 +2490,7 @@ class DesignWindow(QMainWindow):
                 continue
             if name == "select_tubes":
                 if page is None:
-                    notes.append("还没有布管图，先保留“管板型式”进入布管。")
+                    notes.append("当前还没有布管图。")
                 else:
                     tubes = list(getattr(action, "tubes", []) or [])
                     centers, problems = page.centers_for_refs(tubes, "select")
@@ -2596,7 +2594,7 @@ class DesignWindow(QMainWindow):
                 continue
             if name == "dump_holes":
                 if page is None:
-                    notes.append("还没有布管结果，先保留“管板型式”进入布管。")
+                    notes.append("当前还没有布管结果。")
                 else:
                     rows_data = page.hole_coordinates()
                     self.conversation.append_widget(HoleCoordinateCard(rows_data))
@@ -2604,7 +2602,7 @@ class DesignWindow(QMainWindow):
                 continue
             if name in {"dump_components", "remove_components", "convert_to_tube"}:
                 if page is None:
-                    notes.append("还没有布管结果，先保留“管板型式”进入布管。")
+                    notes.append("当前还没有布管结果。")
                     continue
                 kind = str(getattr(action, "kind", "") or "")
                 if name == "dump_components":
@@ -2806,6 +2804,7 @@ class DesignWindow(QMainWindow):
             self.append_chat("assistant", "当前要求仍在处理中，完成后再新建对话。")
             return
         self._clear_preview()
+        self._clear_inline_card()
         self.conversation.clear()
         self.chat_history = []
         self.placement_cards = []
