@@ -105,6 +105,61 @@ def _is_choice_param(name: str) -> bool:
     return any(key in name for key in ("形式", "位置", "安装方式", "方向", "类型", "规格", "定位"))
 
 
+def baffle_chord_specs(parameters: dict, radius: float) -> list[dict]:
+    """按正式程序 ``draw_baffle_plates`` 计算折流板切口弦线。"""
+    if radius <= 0:
+        return []
+
+    def value(name: str, default=""):
+        row = (parameters or {}).get(name, default)
+        return row.get("value", default) if isinstance(row, dict) else row
+
+    def number(name: str, default=None):
+        try:
+            return float(value(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    baffle_type = str(value("折流板类型", "") or "").strip()
+    if baffle_type == "支持板":
+        return []
+    direction = str(value("折流板切口方向", "") or "").strip()
+    orientation = "horizontal" if direction in {"水平上下", "水平"} else "vertical"
+    specs: list[dict] = []
+
+    def append(level: float, color: tuple[int, int, int], tag: str = ""):
+        if level is None or abs(level) > radius:
+            return
+        specs.append({
+            "orientation": orientation,
+            "level": float(level),
+            "half_length": math.sqrt(max(radius * radius - level * level, 0.0)),
+            "color": color,
+            "tag": tag,
+            "width": 5 if tag else 3,
+        })
+
+    if baffle_type in {"双弓型", "双弓形"}:
+        a = number("A型板切口与中心线间距a")
+        b = number("B型板切口与中心线间距b")
+        if a is None or b is None:
+            return []
+        append(a, (150, 200, 255), "A")
+        append(-a, (150, 200, 255), "A")
+        append(b, (255, 150, 150), "B")
+        append(-b, (255, 150, 150), "B")
+        return specs
+
+    cut_rate = number("折流板要求切口率")
+    if cut_rate is None or not 0 <= cut_rate <= 50:
+        return []
+    # 源程序：Dis × (0.5 - cut_rate/100)，其中 Dis/2 即绘图圆半径。
+    distance = radius * (1.0 - 2.0 * cut_rate / 100.0)
+    append(distance, (204, 204, 0))
+    append(-distance, (204, 204, 0))
+    return specs
+
+
 COMPONENT_KIND_TO_TYPE = {
     "rod": 0,
     "free_rod": 1,
@@ -925,12 +980,33 @@ class TubeLayoutPage(QWidget):
         )
         self._draw_axes(result.big_r_wai)
         self._draw_envelope(result)
+        self._draw_baffle_chords(result)
         self._draw_partition(result)
         self._draw_tubes(result)
         self._draw_components()
         self._draw_center_lines(result)
         self.view.fit_all()
         self._update_lagan_summary()
+
+    def _draw_baffle_chords(self, result: engine.LayoutResult) -> None:
+        """绘制正式程序中的单弓黄线或双弓 A/B 蓝红弦线。"""
+        baffle_type = self._param_text("折流板类型")
+        # 正式程序：单弓形按壳体内径圆算黄线；双弓形优先按折流板外径圆算 A/B 线。
+        radius = float(
+            (result.baffle_r or result.big_r_di)
+            if baffle_type in {"双弓型", "双弓形"}
+            else result.big_r_di
+        )
+        for spec in baffle_chord_specs(self.parameters, radius):
+            pen = QPen(QColor(*spec["color"]))
+            pen.setWidth(int(spec["width"]))
+            half = float(spec["half_length"])
+            level = float(spec["level"])
+            if spec["orientation"] == "horizontal":
+                item = self.scene.addLine(-half, level, half, level, pen)
+            else:
+                item = self.scene.addLine(level, -half, level, half, pen)
+            item.setZValue(10)
 
     def _draw_axes(self, radius: float) -> None:
         extension = radius * 0.1
@@ -1768,7 +1844,8 @@ class TubeLayoutPage(QWidget):
         self.recompute(reason="折流板参数已确认", keep_components=True)
         spacing = self._float("折流/支持板间距") or 200.0
         self.status_message.emit(
-            f"折流板已按 折流/支持板外径 {self.result.baffle_r * 2:g}、间距 {spacing:g} 绘制（虚线圆），"
+            f"折流板已按 折流/支持板外径 {self.result.baffle_r * 2:g}、间距 {spacing:g} 绘制"
+            "（外径虚线圆 + 切口弦线），"
             "布置数量由 轴向设计 页确认"
         )
 
@@ -3030,11 +3107,11 @@ class TubeLayoutPage(QWidget):
                 rows.append(row)
                 continue
 
-            # 2) 参数型：折流板只影响虚线圆与轴向设计
+            # 2) 参数型：折流板影响外径虚线圆、切口弦线与轴向设计
             if kind == "baffle":
                 need_recompute = True
                 row["placed"] = 1
-                row["detail"] = "已按新参数重算折流板虚线圆"
+                row["detail"] = "已按新参数重算折流板外径圆和切口弦线"
                 rows.append(row)
                 continue
 
