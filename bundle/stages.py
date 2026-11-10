@@ -44,6 +44,20 @@ PLATE_TYPE_CODES = {label: code for code, label in PLATE_TYPES}
 PLATE_LETTERS = ("a", "b", "c", "d", "e", "f")
 
 
+def plate_type_rule(product_type: str) -> tuple[str, bool]:
+    """Return the source-program default plate form and whether it is user-editable."""
+    product = str(product_type or "").strip().upper()
+    if product in {"AES", "BES", "AKU", "BKU"}:
+        return "a", False
+    if product in {"AEU", "BEU"}:
+        return "a", True
+    if product in {"NEN", "NEN(H)"}:
+        return "b", False
+    if product in {"AEM", "BEM"}:
+        return "e", False
+    return "a", True
+
+
 @dataclass
 class ParamDef:
     name: str
@@ -101,8 +115,12 @@ def _number(value, default=0.0) -> float:
 
 
 class StagePage(QWidget):
+    SHOW_TITLE = True
+    SHOW_HINT = True
     SHOW_SCENE = True  # 是否在示意图下方再画结构简图（管板型式页只用元件库示意图）
     SHOW_GRAPHICS = True
+    COMPACT_PREVIEW_LAYOUT = False
+    PREVIEW_IMAGE_MIN_HEIGHT = 70
     SELECTOR_FIELDS: tuple[str, ...] = ()
     keep_requested = pyqtSignal()
     parameters_changed = pyqtSignal(dict)
@@ -120,13 +138,15 @@ class StagePage(QWidget):
         root.setSpacing(8)
         head = QVBoxLayout()
         head.setSpacing(2)
-        title = QLabel(self.TITLE)
-        title.setStyleSheet("font-size:12pt;font-weight:600;color:#1b1e23;")
-        head.addWidget(title)
+        if self.SHOW_TITLE:
+            title = QLabel(self.TITLE)
+            title.setStyleSheet("font-size:12pt;font-weight:600;color:#1b1e23;")
+            head.addWidget(title)
         hint = QLabel(self.HINT)
         self.hint_label = hint
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8f949c;font-size:9pt;")
+        hint.setVisible(self.SHOW_HINT)
         head.addWidget(hint)
         root.addLayout(head)
 
@@ -148,6 +168,8 @@ class StagePage(QWidget):
         self.table.setHorizontalHeaderLabels(["序号", "参数名称", "参数值", "单位"])
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(26)
+        if self.COMPACT_PREVIEW_LAYOUT:
+            self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setAlternatingRowColors(True)
@@ -158,8 +180,11 @@ class StagePage(QWidget):
         header.setSectionResizeMode(3, QHeaderView.Fixed)
         self.table.setColumnWidth(0, 38)
         self.table.setColumnWidth(2, 120)
-        self.table.setColumnWidth(3, 46)
-        body.addWidget(self.table, 42)
+        self.table.setMinimumWidth(280)
+        if self.COMPACT_PREVIEW_LAYOUT:
+            self.table.setMaximumWidth(760)
+            body.addStretch(1)
+            body.addWidget(self.table, 42)
 
         preview = QFrame()
         self.preview_panel = preview
@@ -170,7 +195,7 @@ class StagePage(QWidget):
         self._pixmap = None
         self.image_label = QLabel("")
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumHeight(70)
+        self.image_label.setMinimumHeight(self.PREVIEW_IMAGE_MIN_HEIGHT)
         preview_layout.addWidget(self.image_label, 1)
         self.scene = QGraphicsScene(self)
         self.view = LayoutGraphicsView(self.scene)
@@ -178,7 +203,14 @@ class StagePage(QWidget):
         self.view.setStyleSheet("background:#ffffff;border:none;")
         self.view.setVisible(self.SHOW_SCENE)
         preview_layout.addWidget(self.view, 2)
-        body.addWidget(preview, 58)
+        if self.COMPACT_PREVIEW_LAYOUT:
+            preview.setMinimumWidth(300)
+            preview.setMaximumWidth(680)
+            body.addWidget(preview, 58)
+            body.addStretch(1)
+        else:
+            body.addWidget(self.table, 42)
+            body.addWidget(preview, 58)
         preview.setVisible(self.SHOW_GRAPHICS)
         root.addLayout(body, 1)
 
@@ -207,6 +239,23 @@ class StagePage(QWidget):
     def set_defs(self, defs: list[ParamDef]) -> None:
         self.defs = defs
         self.rebuild()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._resize_unit_column()
+
+    def _resize_unit_column(self) -> None:
+        self.table.resizeColumnToContents(3)
+        self.table.setColumnWidth(3, max(56, self.table.columnWidth(3)))
+
+    def _fit_table_rows(self) -> None:
+        if not self.COMPACT_PREVIEW_LAYOUT:
+            return
+        rows_height = (
+            self.table.verticalHeader().defaultSectionSize() * self.table.rowCount()
+        )
+        header_height = self.table.horizontalHeader().sizeHint().height()
+        self.table.setMinimumHeight(rows_height + header_height + 4)
 
     def rebuild(self) -> None:
         table = self.table
@@ -259,6 +308,8 @@ class StagePage(QWidget):
             editor = self._make_editor(definition)
             table.setCellWidget(row, 2, editor)
             self._editors[definition.name] = editor
+        self._fit_table_rows()
+        self._resize_unit_column()
         self.refresh_preview()
 
     def _make_editor(self, definition: ParamDef) -> QWidget:
@@ -437,10 +488,12 @@ class StagePage(QWidget):
 
 class SheetFormStage(StagePage):
     TITLE = "管板型式"
-    HINT = "管板类型与结构尺寸来自元件库.管板形式表；公称直径取自前序模块已保存的数据。"
-    # 正式程序的管板型式页只有“形式示意图 + 参数”，没有额外的结构圆
+    SHOW_TITLE = False
+    SHOW_HINT = False
     SHOW_SCENE = False
-    SHOW_GRAPHICS = False
+    SHOW_GRAPHICS = True
+    COMPACT_PREVIEW_LAYOUT = True
+    PREVIEW_IMAGE_MIN_HEIGHT = 260
     SELECTOR_FIELDS = ("管板类型",)
 
     def __init__(self, repository=None, product_type: str = "AEU", dn: float = 1000.0,
@@ -449,10 +502,14 @@ class SheetFormStage(StagePage):
         self.product_type = product_type
         self.dn = dn
         super().__init__(parent)
-        self.letter = "a"
-        self.load_form("a")
+        self.letter, _allow_modify = plate_type_rule(product_type)
+        self.load_form(self.letter)
 
     def load_form(self, letter: str) -> None:
+        default_letter, allow_modify = plate_type_rule(self.product_type)
+        letter = str(letter or "").strip().lower()
+        if not allow_modify or letter not in PLATE_LETTERS:
+            letter = default_letter
         self.letter = letter
         rows = []
         if self.repository is not None:
@@ -460,9 +517,7 @@ class SheetFormStage(StagePage):
                 rows = self.repository.sheet_form(letter)
             except Exception:
                 rows = []
-        defs = [ParamDef("产品型式", self.product_type, "", "readonly")]
-        defs.append(ParamDef("公称直径 DN", f"{self.dn:g}", "mm", "readonly"))
-        defs.append(ParamDef("管板类型", letter, "", "combo", PLATE_LETTERS))
+        defs = [ParamDef("管板类型", letter, "", "combo", PLATE_LETTERS)]
         symbol_rows = [row for row in rows if row["参数符号"]]
         if not symbol_rows:
             # 元件库没有该型式的结构尺寸时，用正式程序默认的 R1/R2/h/α/ρ/e 占位
@@ -476,10 +531,10 @@ class SheetFormStage(StagePage):
             ]
         for row in symbol_rows:
             defs.append(ParamDef(str(row["参数符号"]), row["默认值"], "mm"))
-        defs.append(ParamDef("布管限定圆 DL", "", "", "readonly"))
-        # DL 由 DN 与 R2 联动（正式程序 update_tube_layout_circle_dl）
         self.set_defs(defs)
-        self.set_value("布管限定圆 DL", self._dl_text())
+        selector = self.selector_editors.get("管板类型")
+        if isinstance(selector, QComboBox):
+            selector.setEnabled(allow_modify)
         self._set_image(STATIC / "plate_form" / f"{letter}.png")
         self.refresh_preview()
 
@@ -490,14 +545,16 @@ class SheetFormStage(StagePage):
 
     def _on_edited(self, name: str) -> None:
         if name == "管板类型":
+            default_letter, allow_modify = plate_type_rule(self.product_type)
             letter = self._editor_value("管板类型")
+            if not allow_modify:
+                self.load_form(default_letter)
+                return
             if letter and letter != self.letter:
                 self.load_form(letter)
                 self.parameters_changed.emit(self.values())
                 return
         super()._on_edited(name)
-        if name in {"R2", "R1", "h"}:
-            self.set_value("布管限定圆 DL", self._dl_text())
 
     def draw_preview(self) -> None:
         """管板型式页只显示“元件库.管板形式表”对应的形式示意图（与正式程序一致），
@@ -507,11 +564,11 @@ class SheetFormStage(StagePage):
 
     def validate(self) -> list[dict]:
         issues = []
-        dn = _number(self.values().get("公称直径 DN"), 0)
+        dn = _number(self.dn, 0)
         r2 = _number(self.values().get("R2"), 0)
         r1 = _number(self.values().get("R1"), 0)
         if dn <= 0:
-            issues.append({"field": "公称直径 DN", "message": "公称直径必须大于 0", "recommended": 1000})
+            issues.append({"field": "公称直径", "message": "公称直径必须大于 0", "recommended": 1000})
         if r2 < 0:
             issues.append({"field": "R2", "message": "R2 不能小于 0", "recommended": 8})
         if r1 < 0:
@@ -526,17 +583,20 @@ class SheetFormStage(StagePage):
             "parameters": values,
             "管板类型": values.get("管板类型", "a"),
             "image": (STATIC / "plate_form" / f"{values.get('管板类型', 'a')}.png").as_posix(),
-            "布管限定圆 DL": _number(values.get("布管限定圆 DL"), self.dn),
+            "布管限定圆 DL": _number(self._dl_text(), self.dn),
             "R2": _number(values.get("R2"), 8.0),
         }
 
 
 class TubeConnectionStage(StagePage):
     TITLE = "管-板连接"
-    HINT = "连接方式与管孔结构参数来自元件库.管板连接表；示意图为正式程序原图。"
+    SHOW_TITLE = False
+    SHOW_HINT = False
     # 正式程序该页只有“原图 + 参数”，不自绘剖面图
     SHOW_SCENE = False
-    SHOW_GRAPHICS = False
+    SHOW_GRAPHICS = True
+    COMPACT_PREVIEW_LAYOUT = True
+    PREVIEW_IMAGE_MIN_HEIGHT = 260
     SELECTOR_FIELDS = ("管板连接方式", "管板类型")
 
     def __init__(self, repository=None, mode: str | None = None, plate_type: str = "0", parent=None):
@@ -609,7 +669,11 @@ class TubeConnectionStage(StagePage):
         正式程序该页用的是 static/<连接方式>/*.png 原图。
         """
         self.scene.clear()
-        self._set_gallery(self._mode_images())
+        images = self._mode_images()
+        if len(images) == 1:
+            self._set_image(images[0])
+        else:
+            self._set_gallery(images)
 
     def validate(self) -> list[dict]:
         issues = []
@@ -639,7 +703,8 @@ class TubeConnectionStage(StagePage):
 
 class AxialStage(StagePage):
     TITLE = "轴向设计"
-    HINT = "换热管长度由布管页联动；折流板间距决定轴向布置草图。"
+    SHOW_TITLE = False
+    SHOW_HINT = False
 
     def __init__(self, tube_length: float = 4500.0, baffle_spacing: float = 200.0,
                  plate_thickness: float = 60.0, parent=None):

@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 
 from PyQt5.QtCore import QCoreApplication, QEvent, Qt
-from PyQt5.QtGui import QTextCursor
+from PyQt5.QtGui import QFontMetrics, QTextCursor
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 
@@ -12,7 +12,7 @@ from db.production import DatabaseUnavailable
 from bundle.page import TubeLayoutPage
 from models import STAGES
 from session import DesignSession
-from bundle.stages import SheetFormStage, TubeConnectionStage
+from bundle.stages import AxialStage, SheetFormStage, TubeConnectionStage
 from window import DesignWindow, MessageInput, PlanParamField
 
 
@@ -176,6 +176,114 @@ class WindowTests(unittest.TestCase):
 
         self.assertEqual(page.to_payload()["管板类型"], "1")
 
+    def test_sheet_form_type_follows_product_type_rules(self):
+        fixed_types = {
+            "AES": "a",
+            "BES": "a",
+            "AKU": "a",
+            "BKU": "a",
+            "NEN": "b",
+            "NEN(H)": "b",
+            "AEM": "e",
+            "BEM": "e",
+        }
+        for product_type, expected in fixed_types.items():
+            with self.subTest(product_type=product_type):
+                page = SheetFormStage(None, product_type, 1000)
+                selector = page.selector_editors["管板类型"]
+                self.assertEqual(page.letter, expected)
+                self.assertEqual(selector.currentText(), expected)
+                self.assertFalse(selector.isEnabled())
+                page.load_form("f")
+                self.assertEqual(page.letter, expected)
+                self.assertEqual(page.to_payload()["管板类型"], expected)
+
+        for product_type in ("AEU", "BEU", "OTHER"):
+            with self.subTest(product_type=product_type):
+                page = SheetFormStage(None, product_type, 1000)
+                selector = page.selector_editors["管板类型"]
+                self.assertEqual(page.letter, "a")
+                self.assertTrue(selector.isEnabled())
+                selector.setCurrentText("f")
+                page._on_edited("管板类型")
+                self.assertEqual(page.letter, "f")
+                self.assertEqual(page.to_payload()["管板类型"], "f")
+
+    def test_sheet_and_connection_stages_show_their_original_diagrams(self):
+        pages = (SheetFormStage(None, "AEU", 1000), TubeConnectionStage(None))
+        for page in pages:
+            with self.subTest(stage=page.TITLE):
+                page.resize(1200, 700)
+
+                self.assertFalse(page.preview_panel.isHidden())
+                self.assertIsNotNone(page._pixmap)
+                self.assertFalse(page._pixmap.isNull())
+
+    def test_sheet_form_hides_duplicate_inner_title(self):
+        page = SheetFormStage(None, "AEU", 1000)
+
+        self.assertNotIn(
+            "管板型式",
+            [label.text() for label in page.findChildren(QLabel)],
+        )
+
+    def test_connection_and_axial_stages_hide_duplicate_titles_and_hints(self):
+        pages = (TubeConnectionStage(None), AxialStage())
+        for page in pages:
+            with self.subTest(stage=page.TITLE):
+                labels = [label.text() for label in page.findChildren(QLabel)]
+                self.assertNotIn(page.TITLE, labels)
+                self.assertFalse(page.hint_label.isVisible())
+
+    def test_sheet_form_shows_only_source_parameters_but_keeps_derived_dl(self):
+        page = SheetFormStage(None, "AEU", 1000)
+        row_names = [
+            page.table.item(row, 1).text()
+            for row in range(page.table.rowCount())
+            if page.table.item(row, 1) is not None
+        ]
+        payload = page.to_payload()
+
+        self.assertNotIn("产品型式", row_names)
+        self.assertNotIn("公称直径 DN", row_names)
+        self.assertNotIn("布管限定圆 DL", row_names)
+        self.assertEqual(row_names, ["R1", "R2", "h", "α", "ρ", "e"])
+        self.assertEqual(payload["布管限定圆 DL"], 984)
+        self.assertNotIn("布管限定圆 DL", payload["parameters"])
+
+    def test_stage_parameter_table_displays_all_rows_without_vertical_scrollbar(self):
+        pages = (SheetFormStage(None, "AEU", 1000), TubeConnectionStage(None))
+        for page in pages:
+            with self.subTest(stage=page.TITLE):
+                header_height = page.table.horizontalHeader().sizeHint().height()
+                desired_height = (
+                    page.table.rowCount()
+                    * page.table.verticalHeader().defaultSectionSize()
+                    + header_height
+                    + 4
+                )
+                self.assertEqual(
+                    page.table.verticalScrollBarPolicy(), Qt.ScrollBarAlwaysOff
+                )
+                self.assertGreaterEqual(page.table.minimumHeight(), desired_height)
+
+    def test_stage_unit_column_fits_all_unit_text(self):
+        pages = (SheetFormStage(None, "AEU", 1000), TubeConnectionStage(None))
+        for page in pages:
+            with self.subTest(stage=page.TITLE):
+                page.resize(1200, 700)
+
+                metrics = QFontMetrics(page.table.font())
+                longest_unit = max(
+                    (
+                        metrics.horizontalAdvance(page.table.item(row, 3).text())
+                        for row in range(page.table.rowCount())
+                        if page.table.item(row, 3) is not None
+                    ),
+                    default=0,
+                )
+                self.assertGreaterEqual(page.table.columnWidth(3), max(56, longest_unit + 8))
+
     def test_keep_outputs_only_data_saved_success(self):
         self.window.headless = True
         self.window.session = DesignSession(
@@ -294,10 +402,21 @@ class WindowTests(unittest.TestCase):
         page.restore_param_table_column_widths()
 
         widths = [page.param_table.columnWidth(index) for index in range(4)]
+        unit_width = max(
+            (
+                QFontMetrics(page.param_table.font()).horizontalAdvance(
+                    page.param_table.item(row, 3).text()
+                ) + 28
+                for row in range(page.param_table.rowCount())
+                if page.param_table.item(row, 3) is not None
+                and page.param_table.item(row, 3).text()
+            ),
+            default=56,
+        )
         self.assertGreaterEqual(widths[0], 48)
         self.assertGreaterEqual(widths[1], 120)
         self.assertGreaterEqual(widths[2], 180)
-        self.assertGreaterEqual(widths[3], 50)
+        self.assertGreaterEqual(widths[3], unit_width)
 
     def test_layout_action_bar_does_not_show_redundant_redraw_button(self):
         page = TubeLayoutPage({}, "AEU", {})

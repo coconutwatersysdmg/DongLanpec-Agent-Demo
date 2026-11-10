@@ -608,13 +608,15 @@ class TubeLayoutPage(QWidget):
         header_font.setBold(True)                    # 表头是粗体，按粗体量宽
         header_metrics = QFontMetrics(header_font)
         unit_metrics = QFontMetrics(table.font())
-        unit_width = header_metrics.horizontalAdvance("单位") + 22
+        unit_width = header_metrics.horizontalAdvance("单位") + 28
         for row in range(table.rowCount()):
             unit_item = table.item(row, 3)
             if unit_item is None or not unit_item.text():
                 continue
-            unit_width = max(unit_width, unit_metrics.horizontalAdvance(unit_item.text()) + 22)
-        unit_width = max(46, min(unit_width, 96))
+            unit_width = max(
+                unit_width, unit_metrics.horizontalAdvance(unit_item.text()) + 28
+            )
+        unit_width = max(56, unit_width)
         remaining = max(0, total - col0_width - unit_width)
         # 参数名按当前可见行的最长名字给宽（“分程隔板两侧相邻管中心距（竖直）”这类不能出省略号），
         # 剩下的全给参数值列；窗口特别窄时优先保住参数值列，名字才允许省略（有 tooltip）。
