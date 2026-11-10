@@ -23,12 +23,34 @@ class ParamTableTests(unittest.TestCase):
         self.assertGreaterEqual(kinds.get("number", 0), 10)
         self.assertGreaterEqual(kinds.get("combo_edit", 0), 1)
 
-    def test_recommend_placeholder_exists(self):
-        placeholders = [
-            name for name in params.PARAM_ORDER
-            if "程序推荐" in params.spec_for(name, "AEU", {"管程程数": {"value": "2"}}).options
-        ]
-        self.assertTrue(placeholders, "至少应有“程序推荐”可输入项（如隔条位置尺寸 W）")
+    def test_tube_do_and_length_are_editable_combos(self):
+        """正式程序：换热管外径 do / 公称长度 LN = 下拉可选 + 手工输入。"""
+        for name, option in (("换热管外径 do", "25"), ("换热管公称长度 LN", "4500")):
+            spec = params.spec_for(name, "AEU", {})
+            self.assertEqual(spec.kind, "combo_edit", f"{name} 必须是可输入下拉框")
+            self.assertIn(option, spec.options)
+            self.assertTrue(spec.allows_manual_input)
+
+    def test_tube_arrangement_new_wording(self):
+        """正式程序 104d4358：排列方式下拉改成带角度文案，内部仍存规范名。"""
+        spec = params.spec_for("换热管排列方式", "AEU", {})
+        self.assertEqual(spec.kind, "combo")
+        self.assertEqual(list(spec.options), list(params.TUBE_ARRANGEMENT_OPTIONS))
+        self.assertEqual(params.normalize_tube_arrangement("转角正方形"), "转角正方形排列（45°）")
+        self.assertEqual(params.canonical_tube_arrangement("转角正方形排列（45°）"), "转角正方形")
+        self.assertEqual(params.LB_VALUE_MAP["换热管排列方式"]["转角正方形排列（45°）"], "3")
+        self.assertEqual(params.LB_VALUE_MAP["换热管排列方式"]["正三角形排列（30°）"], "1")
+
+    def test_tie_rod_diameters_follow_formal_program(self):
+        self.assertNotIn("22", params.TIE_ROD_DIAMETERS)
+        self.assertNotIn("24", params.TIE_ROD_DIAMETERS)
+        self.assertEqual(params.spec_for("拉杆直径", "AEU", {}).options, params.TIE_ROD_DIAMETERS)
+
+    def test_plain_text_cells_stay_text(self):
+        """正式程序里折流板类型/隔条/吊环螺钉规格都是普通单元格，不是下拉框。"""
+        for name in ("折流板类型", "隔条位置尺寸 W", "吊环螺钉规格"):
+            spec = params.spec_for(name, "AEU", {"管程程数": {"value": "2"}})
+            self.assertEqual(spec.kind, "text", f"{name} 在正式程序里是普通单元格")
 
     def test_derived_field_is_readonly(self):
         spec = params.spec_for("布管限定圆 DL", "AEU", {})

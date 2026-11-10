@@ -13,8 +13,8 @@ Demo 的布管数据是数学坐标（y 向上），调用方用 `(x, -y)` 换�
 三种形式（正式程序 `防冲板形式`）
 --------------------------------
 1. 平板形 `flat_points()`：一条粗折线，线宽 = 防冲板厚度（正式程序用 pen 画线，不填充）。
-   * 参照管顶部连线：整段沿“屏幕上方”平移
-     `max(do/2, (do/2 + 板厚/2 + 0.5) / |ny|)`，**长度不变**；
+   * 参照管顶部连线：整段沿远离管板圆心的一侧平移
+     `do/2 + 板厚/2 + 0.5`，**长度不变**；
    * 参照管中心连线：两端各内缩 `do/2`，长度 = 中心距 − do。
 
 2. 圆弧形 `folded_geometry()`：其实是 **折边梯形 A-P-Q-B**（开口朝圆心），
@@ -87,18 +87,18 @@ def flat_points(
     ux, uy = _unit(_sub(point2, point1))
 
     if "顶部" in str(placement or ""):
-        # 候选法向里取“屏幕上更靠上”的一侧（Qt 里 y 越小越上）
+        # 选远离管板圆心的一侧；场景坐标 y 向下，所以底半圆应向下偏移。
         n1 = (-uy, ux)
         n2 = (uy, -ux)
-        nx, ny = n1 if n1[1] <= n2[1] else n2
-        required = do / 2.0 + thk / 2.0 + 0.5  # 0.5 为正式程序里的安全余量
-        shift = do / 2.0
-        if ny < -1e-6:
-            shift = max(shift, required / (-ny))
+        midpoint = _mid(point1, point2)
+        dot1 = n1[0] * midpoint[0] + n1[1] * midpoint[1]
+        dot2 = n2[0] * midpoint[0] + n2[1] * midpoint[1]
+        if abs(dot1 - dot2) <= 1e-9:
+            # 沿半径选不出唯一外侧时（例如参照管连线过圆心），保留原来的上侧规则。
+            nx, ny = n1 if n1[1] <= n2[1] else n2
         else:
-            # 法向几乎不带竖直分量（两管连线接近竖直），直接按屏幕上方平移
-            nx, ny = 0.0, -1.0
-            shift = max(shift, required)
+            nx, ny = n1 if dot1 > dot2 else n2
+        shift = do / 2.0 + thk / 2.0 + 0.5
         return [
             (point1[0] + nx * shift, point1[1] + ny * shift),
             (point2[0] + nx * shift, point2[1] + ny * shift),

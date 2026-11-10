@@ -48,6 +48,17 @@ class _Selectable:
             return
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):  # noqa: N802 - Qt API
+        if (
+            event.button() == Qt.LeftButton
+            and self.controller is not None
+            and getattr(self, "component_index", None) is not None
+        ):
+            self.controller.item_double_clicked(self)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
 
 class TubeItem(_Selectable, QGraphicsEllipseItem):
     """换热管孔。坐标与半径来自正式程序布管接口返回值。

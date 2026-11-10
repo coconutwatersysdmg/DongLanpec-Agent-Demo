@@ -11,10 +11,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QFont, QFontMetrics, QIcon, QPainter, QPixmap
+from PyQt5.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPalette,
+    QPixmap,
+)
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
@@ -42,17 +51,19 @@ class TubePassFormComboBox(QComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setEditable(False)
-        self.setMinimumHeight(28)
+        self.setMinimumHeight(22)
         view = QListView()
         view.setSpacing(2)
         view.setStyleSheet("QListView::item{padding:2px 4px;}")
         self.setView(view)
+        # 与参数表其它下拉框同款：白底、1px #CCCCCC、右侧灰色三角
         self.setStyleSheet(
-            "QComboBox{border:1px solid #e6e5e2;border-radius:4px;background:#ffffff;"
+            "QComboBox{border:1px solid #CCCCCC;background:#ffffff;"
             "padding:0px;padding-right:18px;}"
-            "QComboBox:hover{border-color:#c9d8ea;}"
-            "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:top right;"
-            "width:18px;border:none;background:transparent;}"
+            "QComboBox::drop-down{subcontrol-origin:padding;"
+            "subcontrol-position:top right;width:14px;border:none;background:transparent;}"
+            f"QComboBox::down-arrow{{image:url({combo_arrow_url()});"
+            "width:10px;height:6px;}"
         )
 
     # ---- 绘制 ----
@@ -145,6 +156,142 @@ class RightAlignedComboBox(QComboBox):
     def mousePressEvent(self, event):  # noqa: N802 - Qt API
         # 只读 lineEdit 不会自己弹下拉，这里补上，点整块区域都能选；
         # 可编辑下拉保持原生行为，否则点一下就没法手工输入了。
+        line = self.lineEdit()
+        if event.button() == Qt.LeftButton and line is not None and line.isReadOnly():
+            self.showPopup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+# ---------------------------------------------------------------- 参数表下拉框
+# 照搬正式程序 modules/buguan/buguan_ziyong/buguan_param_table_style.py：
+# 白底、1px #CCCCCC 直角边框、10pt、右侧 14px 透明箭头区 + 灰色 SVG 三角，
+# 弹窗白底 #CCCCCC 边框、选中行 #d9e6f7；禁用时 #f5f7fa 底 + #969696 字。
+PARAM_COMBO_BORDER = "#CCCCCC"
+PARAM_COMBO_TEXT = "#1f1f1f"
+PARAM_COMBO_SELECTION = "#d9e6f7"
+PARAM_COMBO_DISABLED_BG = "#f5f7fa"
+PARAM_COMBO_DISABLED_TEXT = "#969696"
+_COMBO_ARROW_SVG = (Path(__file__).resolve().parents[1] / "assets" / "combo_arrow_gray.svg")
+_ARROW_URL_CACHE: str | None = None
+
+
+def combo_arrow_url() -> str:
+    """QSS url() 用的箭头路径。
+
+    QSS 的 url() 不认非 ASCII 路径，而这个 Demo 可能被放在“管束AI方案”这种
+    中文目录下，直接写 assets 路径箭头会消失。所以复制一份到临时目录（纯 ASCII）
+    再用；复制失败就退回原路径。
+    """
+    global _ARROW_URL_CACHE
+    if _ARROW_URL_CACHE:
+        return _ARROW_URL_CACHE
+    path = _COMBO_ARROW_SVG.as_posix()
+    try:
+        if not _COMBO_ARROW_SVG.exists():
+            _ARROW_URL_CACHE = path
+            return path
+        if path.isascii():
+            _ARROW_URL_CACHE = path
+            return path
+        import shutil
+        import tempfile
+
+        cached = Path(tempfile.gettempdir()) / "donglanpec_combo_arrow_gray.svg"
+        if (
+            not cached.exists()
+            or cached.stat().st_mtime < _COMBO_ARROW_SVG.stat().st_mtime
+        ):
+            shutil.copyfile(_COMBO_ARROW_SVG, cached)
+        _ARROW_URL_CACHE = cached.as_posix()
+    except Exception:
+        _ARROW_URL_CACHE = path
+    return _ARROW_URL_CACHE
+
+
+def param_combo_stylesheet(disabled: bool = False, border: str | None = None) -> str:
+    """正式程序 get_param_combo_stylesheet() 的同款实现（border 可给校验红框）。"""
+    arrow = combo_arrow_url()
+    line_color = border or PARAM_COMBO_BORDER
+    base = (
+        f"background-color: #ffffff;border: 1px solid {line_color};"
+        f"color: {PARAM_COMBO_TEXT};font-size: 10pt;min-height: 22px;"
+        "padding: 1px 16px 1px 4px;"
+    )
+    popup = (
+        "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:top right;"
+        "width:14px;border:none;background:transparent;}"
+        f"QComboBox::down-arrow{{image:url({arrow});width:10px;height:6px;}}"
+        "QComboBox QAbstractItemView{background-color:#ffffff;"
+        f"border:1px solid {PARAM_COMBO_BORDER};color:{PARAM_COMBO_TEXT};"
+        f"selection-background-color:{PARAM_COMBO_SELECTION};"
+        f"selection-color:{PARAM_COMBO_TEXT};outline:0;}}"
+        "QComboBox QLineEdit{border:none;background:transparent;padding:0;margin:0;"
+        f"color:{PARAM_COMBO_TEXT};selection-background-color:{PARAM_COMBO_SELECTION};"
+        f"selection-color:{PARAM_COMBO_TEXT};}}"
+    )
+    if disabled:
+        return (
+            f"QComboBox{{{base}background-color:{PARAM_COMBO_DISABLED_BG};"
+            f"color:{PARAM_COMBO_TEXT if border else PARAM_COMBO_DISABLED_TEXT};}}"
+            f"{popup}"
+        )
+    return f"QComboBox{{{base}}}{popup}"
+
+
+def apply_param_combo_style(
+    combo: QComboBox, disabled: bool = False, border: str | None = None
+) -> None:
+    """套样式 + 修调色板（正式程序同名函数），避免选中整行时文字变白。"""
+    if not isinstance(combo, QComboBox):
+        return
+    combo.setStyleSheet(param_combo_stylesheet(disabled=disabled, border=border))
+    text_color = QColor(
+        PARAM_COMBO_TEXT if (border or not disabled) else PARAM_COMBO_DISABLED_TEXT
+    )
+    palette = combo.palette()
+    for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+        palette.setColor(group, QPalette.Text, text_color)
+        palette.setColor(group, QPalette.ButtonText, text_color)
+        palette.setColor(group, QPalette.WindowText, text_color)
+        if group != QPalette.Disabled:
+            palette.setColor(group, QPalette.Highlight, QColor(PARAM_COMBO_SELECTION))
+            palette.setColor(group, QPalette.HighlightedText, QColor(PARAM_COMBO_TEXT))
+    combo.setPalette(palette)
+    line = combo.lineEdit()
+    if line is not None:
+        line.setStyleSheet(
+            "border:none;background:transparent;padding:0;margin:0;"
+            f"color:{PARAM_COMBO_TEXT};"
+            f"selection-background-color:{PARAM_COMBO_SELECTION};"
+            f"selection-color:{PARAM_COMBO_TEXT};"
+        )
+
+
+class ParamComboBox(QComboBox):
+    """参数表里的下拉框：禁用滚轮（正式程序 NoWheelComboBox），样式照搬参数表。
+
+    editable=True 时就是“下拉列表 + 手工输入”两用（换热管外径 do、公称长度 LN
+    在正式程序里就是这么做的）。文字默认右对齐——参数值列整列右对齐。
+    """
+
+    def __init__(self, parent=None, editable: bool = False):
+        super().__init__(parent)
+        self.setEditable(True)               # 用只读 lineEdit 实现右对齐
+        self.setInsertPolicy(QComboBox.NoInsert)
+        self.setFocusPolicy(Qt.StrongFocus)
+        line = self.lineEdit()
+        if line is not None:
+            line.setReadOnly(not editable)
+            line.setFrame(False)
+            line.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        apply_param_combo_style(self, disabled=False)
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        event.ignore()                        # 正式程序：滚轮不切选项
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt API
         line = self.lineEdit()
         if event.button() == Qt.LeftButton and line is not None and line.isReadOnly():
             self.showPopup()
@@ -366,17 +513,19 @@ class ComponentParamDialog(QDialog):
 
     @staticmethod
     def _make_editor(spec: ParamField, value: str) -> QWidget:
-        """统一观感的输入控件：下拉右对齐、数字右对齐、只读灰底。"""
+        """输入控件：样式照搬正式程序弹窗（ui_style.py 的 QDialog QLineEdit/QComboBox）。"""
         base = (
-            "QLineEdit{background:#ffffff;border:1px solid #dfe2e7;"
-            "border-radius:7px;padding:6px 9px;font-size:10pt;color:#1f2329;"
-            "min-height:20px;}"
-            "QComboBox{background:#ffffff;border:1px solid #dfe2e7;"
-            "border-radius:7px;padding:6px 26px 6px 9px;font-size:10pt;"
-            "color:#1f2329;min-height:20px;}"
-            "QLineEdit:focus,QComboBox:focus{border-color:#2f6fe4;}"
-            "QComboBox QAbstractItemView{outline:none;border:1px solid #dfe2e7;"
-            "selection-background-color:#eaf1fe;selection-color:#2458b8;padding:2px;}"
+            "QLineEdit{background:#ffffff;border:1px solid #CCCCCC;border-radius:0px;"
+            "color:#1f1f1f;font-size:10pt;min-height:22px;padding:0px 4px;}"
+            # 与同排输入框等高（min-height 20 + 上下边框 = 24），源程序是 22/22 略高 2px
+            "QComboBox{background:#ffffff;border:1px solid #CCCCCC;border-radius:0px;"
+            "color:#1f1f1f;font-size:10pt;min-height:22px;padding:0px 16px 0px 4px;}"
+            "QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:top right;"
+            "width:14px;border:none;background:transparent;}"
+            f"QComboBox::down-arrow{{image:url({combo_arrow_url()});width:10px;height:6px;}}"
+            "QComboBox QAbstractItemView{background:#ffffff;border:1px solid #CCCCCC;"
+            "selection-background-color:#d9e6f7;selection-color:#1f1f1f;outline:0;}"
+            "QComboBox QLineEdit{border:none;background:transparent;}"
         )
         if spec.kind == "combo":
             editor = RightAlignedComboBox()
@@ -391,8 +540,8 @@ class ComponentParamDialog(QDialog):
         if spec.kind == "readonly":
             editor.setReadOnly(True)
             editor.setStyleSheet(
-                "QLineEdit{background:#f6f7f9;border:1px solid #eceef2;border-radius:7px;"
-                "padding:6px 9px;color:#6b7280;font-size:10pt;min-height:20px;}"
+                "QLineEdit{background:#f5f7fa;border:1px solid #CCCCCC;border-radius:0px;"
+                "padding:0px 4px;color:#969696;font-size:10pt;min-height:22px;}"
             )
             return editor
         editor.setStyleSheet(base)

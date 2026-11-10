@@ -12,8 +12,19 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 
-from PyQt5.QtCore import QEvent, QPointF, QRectF, QSize, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFont, QIcon, QPainterPath, QPen, QPixmap
+from PyQt5.QtCore import QEvent, QLocale, QPointF, QRectF, QSize, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QDoubleValidator,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QIntValidator,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -59,18 +70,80 @@ from .params import (
     DERIVED_FIELDS,
     PARAM_ORDER,
     TIE_ROD_DIAMETERS,
+    canonical_tube_arrangement,
     layout_hidden_params,
+    normalize_param_value,
+    normalize_tube_arrangement,
     spec_for,
     tube_pattern_image,
 )
+from modules.buguan.buguan_ziyong.tube_pass.adapter import (
+    is_local_tube_pass_cat,
+    run_local_tube_layout,
+)
 from .view import LayoutGraphicsView
-from .widgets import ParamField, RightAlignedComboBox, TubePassFormComboBox, ask_component_params
+from .widgets import (
+    ParamComboBox,
+    ParamField,
+    TubePassFormComboBox,
+    apply_param_combo_style,
+    ask_component_params,
+    param_combo_stylesheet,
+)
 
 STATIC_DIR = __import__("pathlib").Path(__file__).resolve().parent / "static"
+_ASSETS_DIR = __import__("pathlib").Path(__file__).resolve().parents[1] / "assets"
 
-# 管程分程形式行：示意图要看得清，行高与值列都比普通行宽
-PATTERN_ROW_HEIGHT = 60
+# ---------------------------------------------------------------- 参数表（照搬正式程序）
+# 行高 40、10pt、方角灰边；下拉框样式在 widgets.param_combo_stylesheet（同款）。
+PARAM_ROW_HEIGHT = 40
+# 管程分程形式行：正式程序也是统一 40 行高，示意图在格子里等比缩放
+PATTERN_ROW_HEIGHT = PARAM_ROW_HEIGHT
 PATTERN_COLUMN_WIDTH = 220
+
+PARAM_TABLE_STYLE = f"""
+QTableWidget {{
+    gridline-color: #d4d4d4;
+    background-color: #ffffff;
+    border: 1px solid #bdbdbd;
+    font-size: 10pt;
+    selection-background-color: #e3f2fd;
+    selection-color: #212121;
+}}
+QTableWidget::item {{
+    padding: 4px 6px;
+    border-bottom: 1px solid #eeeeee;
+}}
+QTableWidget::item:alternate {{
+    background-color: #fafafa;
+}}
+QTableWidget::item:selected {{
+    background-color: #e3f2fd;
+    color: #212121;
+}}
+QHeaderView::section {{
+    background-color: #f2f2f2;
+    color: #222222;
+    padding: 6px 4px;
+    border: none;
+    border-bottom: 1px solid #bdbdbd;
+    border-right: 1px solid #e0e0e0;
+    font-weight: 700;
+    font-size: 10pt;
+}}
+QTableWidget QWidget {{
+    background-color: transparent;
+}}
+QTableWidget QLineEdit {{
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    padding: 2px 10px;
+    background-color: #ffffff;
+    color: #303133;
+    font-size: 10pt;
+    min-height: 24px;
+}}
+"""
 
 # 方案卡上的参数名简称（完整参数名太长，卡片要短）
 _PARAM_SHORT = {
@@ -200,6 +273,52 @@ def _describe_rows(rows: list[int]) -> str:
     return f"第 {numbers[0]} 行等 {len(numbers)} 行"
 
 
+class ParamTableWidget(QTableWidget):
+    """左侧参数表：单击参数值格就进编辑（正式程序 My_Piping.py eventFilter 的 Excel 手感）。
+
+    正式程序是在 eventFilter 里判断 viewport 的 MouseButtonRelease；这里放在表格自己的
+    mouseReleaseEvent 里，事件类型天然是鼠标事件，不会对别的事件误取 pos()。
+    下拉/示意图格有 cellWidget，点击自然落到控件上，这里只管纯文本格。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 表格自己的尺寸一变就重排列宽（页面 resizeEvent 那一刻视口宽度还是旧的）
+        self.reflow = lambda: None
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self.reflow)
+
+    def _start_value_edit(self, index) -> None:
+        """参数值列进入编辑：只认纯文本格（下拉格有自己的控件）。"""
+        if not index.isValid() or index.column() != 2:
+            return
+        if self.cellWidget(index.row(), 2) is not None:
+            return
+        item = self.item(index.row(), 2)
+        if item is None or not (item.flags() & Qt.ItemIsEditable):
+            return
+        if self.state() != QAbstractItemView.EditingState:
+            QTimer.singleShot(0, lambda i=index: self._deferred_edit(i))
+
+    def _deferred_edit(self, index) -> None:
+        """延时进编辑；真到这一刻已经在编辑就不再动（双击会连发好几次，重复 edit 会关掉编辑框）。"""
+        if self.state() == QAbstractItemView.EditingState:
+            return
+        self.edit(index)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt API
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.LeftButton:
+            self._start_value_edit(self.indexAt(event.pos()))
+
+    def mouseDoubleClickEvent(self, event):  # noqa: N802 - Qt API
+        super().mouseDoubleClickEvent(event)
+        if event.button() == Qt.LeftButton:
+            self._start_value_edit(self.indexAt(event.pos()))
+
+
 class TubeLayoutPage(QWidget):
     keep_requested = pyqtSignal()
     state_changed = pyqtSignal(dict)
@@ -307,27 +426,47 @@ class TubeLayoutPage(QWidget):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(4, 4, 4, 4)
         left_layout.setSpacing(4)
-        self.param_table = QTableWidget(0, 4)
-        self.param_table.setFont(QFont("Microsoft YaHei UI", 9))
+        self.param_table = ParamTableWidget(0, 4)
+        # 照搬正式程序：10pt 字号、行高 40、方角灰边表格（样式见 PARAM_TABLE_STYLE）
+        self.param_table.setFont(QFont("Microsoft YaHei UI", 10))
         self.param_table.setHorizontalHeaderLabels(["序号", "参数名称", "参数值", "单位"])
         self.param_table.verticalHeader().setVisible(False)
-        self.param_table.verticalHeader().setDefaultSectionSize(28)
-        self.param_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.param_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.param_table.verticalHeader().setDefaultSectionSize(PARAM_ROW_HEIGHT)
+        self.param_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        # 正式程序：Excel 式编辑——单击、双击、回车、直接敲字符都能进编辑
+        self.param_table.setEditTriggers(
+            QAbstractItemView.SelectedClicked
+            | QAbstractItemView.DoubleClicked
+            | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed
+        )
+        self.param_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.param_table.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.param_table.setAlternatingRowColors(True)
+        self.param_table.setStyleSheet(PARAM_TABLE_STYLE)
         header = self.param_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        # 参数名也用固定宽度：拉伸列取整会多出 1~3px，把单位列挤出可视区
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
         header.setSectionResizeMode(2, QHeaderView.Fixed)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
-        self.param_table.setColumnWidth(0, 50)
+        self.param_table.setColumnWidth(0, 52)
         self.param_table.setColumnWidth(2, PATTERN_COLUMN_WIDTH)
         self.param_table.setColumnWidth(3, 52)
-        header.setMinimumSectionSize(44)
+        header.setMinimumSectionSize(10)
+        self.param_table.itemChanged.connect(self._on_param_item_changed)
+        self.param_table.reflow = self.restore_param_table_column_widths
         left_layout.addWidget(self.param_table, 1)
         self.lagan_summary = QLabel("拉杆标准要求数量-/已有数量0")
         self.lagan_summary.setStyleSheet("color:#222; padding:4px 6px;")
         left_layout.addWidget(self.lagan_summary)
+        self.divider_correction_tip = QLabel("")
+        self.divider_correction_tip.setWordWrap(True)
+        self.divider_correction_tip.setStyleSheet(
+            "font-size:10px; color:#222; padding:0 6px 4px;"
+        )
+        self.divider_correction_tip.setVisible(False)
+        left_layout.addWidget(self.divider_correction_tip)
         body.addWidget(left, 36)
 
         # 中：图形 + 操作栏
@@ -451,20 +590,49 @@ class TubeLayoutPage(QWidget):
         self.restore_param_table_column_widths()
 
     def restore_param_table_column_widths(self) -> None:
-        """按正式程序的比例恢复参数表列宽，并保证窄窗口下表头仍可读。"""
+        """列宽照搬正式程序 restore_param_table_column_widths()：52 / 剩余 / 0.58 / 单位自适应。
+
+        正式程序第 4 列是 `QHeaderView.ResizeToContents`，宽度跟着“单位”表头和 mm/°/个 走；
+        这里同样按内容算，并且**只用真实视口宽度**（以前给过 420 的下限，窗口一窄
+        四列加起来就超过视口，单位列被挤到右边界外只露出半截“…”）。
+        """
         table = getattr(self, "param_table", None)
         if table is None:
             return
-        total = max(table.viewport().width(), 420)
-        sequence_width = 50
-        unit_width = 52
-        remaining = max(total - sequence_width - unit_width, 0)
-        # 值列需容纳“管程分程形式”示意图；同时给参数名保留至少 120px。
-        value_width = max(180, min(240, int(remaining * 0.52)))
-        if remaining - value_width < 120:
-            value_width = max(180, remaining - 120)
-        table.setColumnWidth(0, sequence_width)
-        table.setColumnWidth(2, value_width)
+        # 留 2px 余量：拉伸列取整后偶尔会多出 1~2px，撑出横向滚动条
+        total = table.viewport().width() - 2
+        if total <= 0:
+            return
+        col0_width = 52
+        header_font = QFont(table.font())
+        header_font.setBold(True)                    # 表头是粗体，按粗体量宽
+        header_metrics = QFontMetrics(header_font)
+        unit_metrics = QFontMetrics(table.font())
+        unit_width = header_metrics.horizontalAdvance("单位") + 22
+        for row in range(table.rowCount()):
+            unit_item = table.item(row, 3)
+            if unit_item is None or not unit_item.text():
+                continue
+            unit_width = max(unit_width, unit_metrics.horizontalAdvance(unit_item.text()) + 22)
+        unit_width = max(46, min(unit_width, 96))
+        remaining = max(0, total - col0_width - unit_width)
+        # 参数名按当前可见行的最长名字给宽（“分程隔板两侧相邻管中心距（竖直）”这类不能出省略号），
+        # 剩下的全给参数值列；窗口特别窄时优先保住参数值列，名字才允许省略（有 tooltip）。
+        name_needed = 0
+        for row in range(table.rowCount()):
+            if table.isRowHidden(row):
+                continue
+            name_item = table.item(row, 1)
+            if name_item is None:
+                continue
+            name_needed = max(name_needed, unit_metrics.horizontalAdvance(name_item.text()) + 22)
+        name_width = min(name_needed or 120, max(remaining - 150, 110))
+        name_width = max(name_width, min(remaining, 110))
+        col1_width = max(name_width, 10)
+        col2_width = max(remaining - col1_width, 72)
+        table.setColumnWidth(0, col0_width)
+        table.setColumnWidth(1, col1_width)
+        table.setColumnWidth(2, col2_width)
         table.setColumnWidth(3, unit_width)
 
     def _place_symmetry_check(self) -> None:
@@ -522,23 +690,36 @@ class TubeLayoutPage(QWidget):
                 unit.setTextAlignment(Qt.AlignCenter)
                 unit.setFlags(Qt.ItemIsEnabled)
                 table.setItem(row, 3, unit)
-                placeholder = QTableWidgetItem("")
-                placeholder.setFlags(Qt.ItemIsEnabled)
-                table.setItem(row, 2, placeholder)
+                # 正式程序：普通参数就是单元格文本，单击/回车进编辑；只有下拉类
+                # （combo / 可输入 combo / 分程形式示意图）才嵌控件。
                 editor = self._make_editor(name, spec, data)
-                table.setCellWidget(row, 2, editor)
-                self._editors[name] = editor
-                table.setRowHeight(row, 28)
+                if editor is None:
+                    item = QTableWidgetItem(normalize_param_value(name, data.get("value"), self.parameters))
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    flags = Qt.ItemIsSelectable | Qt.ItemIsEnabled
+                    if not spec.readonly and name != "公称直径 DN":
+                        flags |= Qt.ItemIsEditable
+                    item.setFlags(flags)
+                    table.setItem(row, 2, item)
+                    self._editors[name] = None
+                else:
+                    placeholder = QTableWidgetItem("")
+                    placeholder.setFlags(Qt.ItemIsEnabled)
+                    table.setItem(row, 2, placeholder)
+                    table.setCellWidget(row, 2, editor)
+                    self._editors[name] = editor
+                table.setRowHeight(row, PARAM_ROW_HEIGHT)
                 self._paint_param_row(row, name)
-            pattern_row = PARAM_ORDER.index("管程分程形式")
-            table.setRowHeight(pattern_row, PATTERN_ROW_HEIGHT)
+            table.setRowHeight(PARAM_ORDER.index("管程分程形式"), PATTERN_ROW_HEIGHT)
             self.apply_param_visibility()
         finally:
             self._suppress_commit = False
         self._lock_outer_base_flag()
+        self.restore_param_table_column_widths()
 
-    def _make_editor(self, name: str, spec, data: dict) -> QWidget:
-        value = "" if data.get("value") is None else str(data.get("value"))
+    def _make_editor(self, name: str, spec, data: dict) -> QWidget | None:
+        # 正式程序填充参数表时的几条兜底（拉杆形式按 do、滑道数量默认 2、旧文案归一…）
+        value = normalize_param_value(name, data.get("value"), self.parameters)
         readonly = spec.readonly
         if spec.kind == "pattern":
             # 正式程序 TubePassFormComboBox：显示示意图，不是数字/文字
@@ -562,13 +743,15 @@ class TubeLayoutPage(QWidget):
             combo.activated.connect(lambda _i, n=name, c=combo: self._commit_param(n, c.currentData()))
             return combo
         if spec.kind == "combo" and spec.options:
-            combo = RightAlignedComboBox()
+            combo = ParamComboBox()
             for option in spec.options:
                 combo.addItem(option, option)
-            index = combo.findData(value) if value else -1
-            if index < 0 and value:
+            # 库里的“转角正方形”要显示成新文案“转角正方形排列（45°）”，提交时再转回去
+            display = normalize_tube_arrangement(value) if name == "换热管排列方式" else value
+            index = combo.findData(display) if display else -1
+            if index < 0 and display:
                 # 正式程序遇到表里没有的历史值时保留显示，但不允许再选新值
-                combo.addItem(value, value)
+                combo.addItem(display, display)
                 index = combo.count() - 1
             if index >= 0:
                 combo.setCurrentIndex(index)
@@ -576,33 +759,30 @@ class TubeLayoutPage(QWidget):
             combo.activated.connect(lambda _i, n=name, c=combo: self._commit_param(n, c.currentData()))
             return combo
         if spec.kind == "combo_edit":
-            combo = RightAlignedComboBox()
-            combo.setEditable(True)
-            combo.setInsertPolicy(QComboBox.NoInsert)
+            # 正式程序：换热管外径 do / 公称长度 LN 都是“下拉可选 + 手工输入”
+            combo = ParamComboBox(editable=True)
             if combo.lineEdit() is not None:
-                # 可编辑下拉：文字右对齐，但允许手工输入参数表里没有的历史值
                 combo.lineEdit().setReadOnly(False)
-                combo.lineEdit().setStyleSheet(
-                    "QLineEdit{background:transparent;border:none;color:#1f2329;"
-                    "padding:0 2px 0 0;}"
-                )
+                if name == "换热管公称长度 LN":
+                    validator = QIntValidator(1, 99999, combo)
+                else:
+                    validator = QDoubleValidator(0.0, 99999.0, 2, combo)
+                    validator.setNotation(QDoubleValidator.StandardNotation)
+                    validator.setLocale(QLocale.c())      # 小数点固定 "."，不跟系统区域
+                combo.setValidator(validator)
             for option in spec.options:
                 combo.addItem(option)
             if value:
                 combo.setEditText(value)
             combo.setEnabled(not readonly)
             combo.activated.connect(lambda _i, n=name, c=combo: self._commit_param(n, c.currentText()))
-            combo.lineEdit().editingFinished.connect(
-                lambda n=name, c=combo: self._commit_param(n, c.currentText())
-            )
+            if combo.lineEdit() is not None:
+                combo.lineEdit().editingFinished.connect(
+                    lambda n=name, c=combo: self._commit_param(n, c.currentText())
+                )
             return combo
-        edit = QLineEdit(value)
-        edit.setEnabled(not readonly)
-        edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        if readonly:
-            edit.setStyleSheet("QLineEdit{background:#f4f6f8;color:#6b7280;}")
-        edit.editingFinished.connect(lambda n=name, e=edit: self._commit_param(n, e.text()))
-        return edit
+        # 普通参数（数字/文本）：正式程序是单元格内直接编辑，不嵌控件
+        return None
 
     def _paint_param_row(self, row: int, name: str) -> None:
         data = self.parameters[name]
@@ -621,6 +801,10 @@ class TubeLayoutPage(QWidget):
             item.setBackground(QColor("#ffffff"))
             item.setToolTip("")
         editor = self._editors.get(name)
+        if editor is None:
+            # 正式程序：公称直径 DN 灰字不可改；只读联动值也灰字
+            grey = name == "公称直径 DN" or spec.readonly
+            item.setForeground(QColor("#969696" if grey else "#1f1f1f"))
         if editor is not None:
             base = "QLineEdit{background:#ffffff;border:1px solid #e6e5e2;border-radius:4px;padding:2px 6px;}"
             error = "QLineEdit{background:#fff5f5;border:1px solid #d04b4b;border-radius:4px;padding:2px 6px;}"
@@ -628,19 +812,14 @@ class TubeLayoutPage(QWidget):
             if isinstance(editor, QLineEdit):
                 editor.setStyleSheet(error if issue else (readonly if spec.readonly else base))
             elif isinstance(editor, QComboBox):
-                combo_style = (
-                    "QComboBox{background:#ffffff;border:1px solid #e6e5e2;border-radius:4px;padding:2px 18px 2px 6px;}"
-                    "QComboBox:hover{border-color:#c9d8ea;}"
+                # 下拉框样式照搬正式程序（白底、1px #CCCCCC、灰色三角），不再用圆角。
+                # 只读/锁定行（是否以外径为基准）灰底灰字。
+                locked = (name == "是否以外径为基准") or spec.readonly or not editor.isEnabled()
+                apply_param_combo_style(
+                    editor,
+                    disabled=locked,
+                    border="#d04b4b" if issue else None,
                 )
-                if issue:
-                    combo_style = "QComboBox{background:#fff5f5;border:1px solid #d04b4b;border-radius:4px;padding:2px 18px 2px 6px;}"
-                if name == "是否以外径为基准":
-                    # 该行与正式程序一致：只读灰显，鼠标也无法操作
-                    combo_style = (
-                        "QComboBox{background:#f4f6f8;color:#969696;border:1px solid #eef0f3;"
-                        "border-radius:4px;padding:2px 18px 2px 6px;}"
-                    )
-                editor.setStyleSheet(combo_style)
                 editor.setToolTip(issue.get("message", "") if issue else "")
             if issue:
                 editor.setToolTip(issue.get("message", ""))
@@ -651,6 +830,8 @@ class TubeLayoutPage(QWidget):
             return False
         spec = spec_for(name, self.product_type, self.parameters)
         text = "" if value is None else str(value).strip()
+        if name == "换热管排列方式":
+            text = canonical_tube_arrangement(text)      # 存库用规范名，与正式程序一致
         # 与正式程序一致：普通下拉只能是现有选项；只读参数不接受修改；数字必须能转成数
         if spec.readonly and source not in {"联动计算", "程序默认值"}:
             if str(self.parameters[name].get("value", "")) != text:
@@ -658,7 +839,10 @@ class TubeLayoutPage(QWidget):
                 self._refresh_editor(name)
                 return False
         if spec.kind == "combo" and spec.options:
-            if text and text not in spec.options:
+            allowed = set(spec.options)
+            if name == "换热管排列方式":
+                allowed |= {canonical_tube_arrangement(option) for option in spec.options}
+            if text and text not in allowed:
                 self._warn(
                     "无效选项",
                     f"{name} 是普通下拉框，只能从现有 {len(spec.options)} 个选项中选择，"
@@ -738,21 +922,51 @@ class TubeLayoutPage(QWidget):
         else:
             QMessageBox.warning(self, title, text)
 
+    def _on_param_item_changed(self, item) -> None:
+        """单元格内编辑提交（正式程序同款：直接改格子里的文字）。"""
+        if self._suppress_commit or item is None or item.column() != 2:
+            return
+        row = item.row()
+        if not 0 <= row < len(PARAM_ORDER):
+            return
+        self._commit_param(PARAM_ORDER[row], item.text())
+
     def _refresh_editor(self, name: str) -> None:
         editor = self._editors.get(name)
         value = self.parameters[name]["value"]
         if editor is None:
+            # 普通参数没有控件，直接回写单元格文本
+            item = self.param_table.item(PARAM_ORDER.index(name), 2)
+            if item is None:
+                return
+            text = normalize_param_value(name, value, self.parameters)
+            if item.text() == text:
+                return
+            self._suppress_commit = True
+            try:
+                item.setText(text)
+            finally:
+                self._suppress_commit = False
             return
         self._suppress_commit = True
         try:
             if isinstance(editor, QLineEdit):
                 editor.setText("" if value is None else str(value))
             elif isinstance(editor, QComboBox):
-                if str(editor.currentData()) == str(value):
+                wanted = (
+                    normalize_tube_arrangement(value)
+                    if name == "换热管排列方式" else str(value)
+                )
+                spec = spec_for(name, self.product_type, self.parameters)
+                if spec.kind == "combo_edit":
+                    if editor.currentText() != wanted:
+                        editor.setEditText(wanted)
                     return
-                index = editor.findData(value)
+                if str(editor.currentData()) == wanted:
+                    return
+                index = editor.findData(wanted)
                 if index < 0:
-                    index = editor.findText(str(value))
+                    index = editor.findText(wanted)
                 if index >= 0:
                     editor.setCurrentIndex(index)
         finally:
@@ -784,7 +998,7 @@ class TubeLayoutPage(QWidget):
         if isinstance(editor, QComboBox):
             editor.setEnabled(False)
             editor.setFocusPolicy(Qt.NoFocus)
-            editor.setStyleSheet("QComboBox:disabled{color:#969696;background:#f4f6f8;}")
+            apply_param_combo_style(editor, disabled=True)   # 正式程序：灰底灰字、箭头照旧
             editor.setToolTip("由设计数据表/通用数据表决定，布管页不可修改")
 
     def _apply_linkage(self, changed: str) -> None:
@@ -887,11 +1101,14 @@ class TubeLayoutPage(QWidget):
         try:
             result = engine.compute(self.parameters, self.product_type, self.defaults)
         except Exception as exc:  # noqa: BLE001 - 需要把真实原因展示给用户
+            self.divider_correction_tip.clear()
+            self.divider_correction_tip.setVisible(False)
             self.issues = [{"field": "换热管中心距 S", "message": str(exc), "recommended": None}]
             self.show_issues()
             self.status_message.emit(f"布管失败：{exc}")
             return False
         self.result = result
+        self._update_divider_correction_tip(result)
         if keep_components:
             # 重算后管孔集合可能变了：把挂在不存在的管孔/壳壁外的旧元件丢掉
             known = set(result.master_centers)
@@ -1419,6 +1636,212 @@ class TubeLayoutPage(QWidget):
             else:
                 self.status_message.emit("已取消元件选中")
 
+    def item_double_clicked(self, item) -> None:
+        """双击已布置元件时打开对应参数弹窗并更新图形。"""
+        index = getattr(item, "component_index", None)
+        if index is None or not 0 <= index < len(self.components):
+            return
+        self.edit_component(index)
+
+    def edit_component(self, index: int) -> None:
+        if not 0 <= index < len(self.components):
+            return
+        component = self.components[index]
+        kind = component.get("kind", "")
+        def is_flat(values: dict) -> bool:
+            return values.get("防冲板形式", "平板形") == "平板形"
+
+        def not_flat(values: dict) -> bool:
+            return not is_flat(values)
+
+        def is_welded(values: dict) -> bool:
+            return values.get("防冲板形式") == "焊接式"
+
+        def is_round_slide(values: dict) -> bool:
+            return values.get("滑道形式") == "圆钢滑道"
+
+        def show_slide_azimuth(values: dict) -> bool:
+            return values.get("滑道形式") == "板式滑道" and values.get("滑道数量") == "1"
+
+        is_kettle = self.product_type in {"AKU", "BKU"}
+        impingement_fields = [
+            ParamField("防冲板形式", "combo", ("平板形", "圆弧形", "焊接式")),
+            ParamField("防冲板厚度", "number", unit="mm", minimum=0.1),
+            ParamField(
+                "放置位置", "combo", ("参照管顶部连线", "参照管中心连线"),
+                visible=is_flat,
+            ),
+            ParamField(
+                "防冲板折边角度", "number", unit="°", minimum=15, maximum=90,
+                visible=not_flat,
+            ),
+            ParamField("防冲板宽度", "number", unit="mm", minimum=1.0,
+                       visible=is_welded),
+            ParamField("防冲板方位角", "number", unit="°", minimum=0,
+                       maximum=359.9, visible=is_welded),
+            ParamField("至圆筒内壁距离", "number", unit="mm", minimum=0.1,
+                       visible=is_welded),
+        ]
+        fields_by_kind = {
+            "rod": (
+                "拉杆参数设置",
+                [
+                    ParamField("拉杆形式", "combo", ("焊接拉杆", "螺纹拉杆")),
+                    ParamField("拉杆直径", "combo", TIE_ROD_DIAMETERS),
+                ],
+            ),
+            "free_rod": (
+                "自由拉杆参数设置",
+                [ParamField("拉杆直径", "combo", TIE_ROD_DIAMETERS)],
+            ),
+            "block_tube": (
+                "中间挡管参数设置",
+                [ParamField("中间挡管安装方式", "combo", ("贯穿", "分割"))],
+            ),
+            "bypass": (
+                "旁路挡板参数设置",
+                [ParamField("旁路挡板厚度", "number", unit="mm", minimum=0.1)],
+            ),
+            "center_baffle": (
+                "中间挡板参数设置",
+                [
+                    ParamField("中间挡板厚度", "number", unit="mm", minimum=0.1),
+                    ParamField("中间挡板安装方式", "combo", ("贯穿", "分割")),
+                ],
+            ),
+            "impingement": ("防冲板参数设置", impingement_fields),
+            "impingement_folded": ("防冲板参数设置", impingement_fields),
+            "impingement_welded": ("防冲板参数设置", impingement_fields),
+            "slide": (
+                "滑道参数设置",
+                [
+                    ParamField("滑道定位", "combo", ("固定管板", "第一块折流板或支持板")),
+                    ParamField("滑道形式", "combo", ("板式滑道", "圆钢滑道")),
+                    ParamField("滑道数量", "combo", ("1", "2")),
+                    ParamField("滑道方位角", "number", unit="°",
+                               visible=show_slide_azimuth),
+                    ParamField("导轨类型", "combo", ("支撑导轨1", "支撑导轨2"),
+                               visible=lambda _values: is_kettle),
+                    ParamField("圆钢规格", "number", unit="mm", minimum=0.1,
+                               visible=is_round_slide),
+                    ParamField("滑道高度", "number", unit="mm", minimum=1.0,
+                               visible=lambda values: not is_round_slide(values)),
+                    ParamField("滑道厚度", "number", unit="mm", minimum=0.1,
+                               visible=lambda values: not is_round_slide(values)),
+                    ParamField("滑道与竖直中心线夹角", "number", unit="°",
+                               visible=lambda values: is_round_slide(values)
+                               or not show_slide_azimuth(values)),
+                    ParamField("滑道切边长度", "number", unit="mm", minimum=0.0,
+                               visible=lambda values: not is_round_slide(values)),
+                    ParamField("滑道切边高度", "number", unit="mm", minimum=0.0,
+                               visible=lambda values: not is_round_slide(values)),
+                ],
+            ),
+            "screw_ring": (
+                "吊环螺钉参数设置",
+                [
+                    ParamField("吊环螺钉规格", "combo", (
+                        "M8", "M10", "M12", "M16", "M20", "M24", "M30", "M36",
+                        "M42", "M48", "M56", "M64", "M72×6", "M80×6", "M100×6",
+                    )),
+                    ParamField("吊环螺钉数量", "number", unit="个", minimum=1, maximum=64),
+                    ParamField("吊环螺钉孔中心距", "number", unit="mm", minimum=0.0),
+                    ParamField("吊环螺钉起始方位角", "number", unit="°", minimum=0,
+                               maximum=359.9),
+                ],
+            ),
+        }
+        config = fields_by_kind.get(kind)
+        if config is None:
+            return
+
+        title, fields = config
+        if kind in {"impingement", "impingement_folded", "impingement_welded"}:
+            if not component.get("pair"):
+                fields = [
+                    ParamField("防冲板形式", "combo", ("焊接式",)),
+                    *fields[1:],
+                ]
+        initial_values = dict(component.get("options") or {})
+        if kind in {"impingement", "impingement_folded", "impingement_welded"}:
+            initial_values.setdefault("防冲板形式", component.get("form") or {
+                "impingement": "平板形",
+                "impingement_folded": "圆弧形",
+                "impingement_welded": "焊接式",
+            }[kind])
+        values = self._ask(title, fields, initial_values=initial_values)
+        if values is None:
+            return
+
+        replacement = None
+        if kind in {"impingement", "impingement_folded", "impingement_welded"}:
+            form = str(values.get("防冲板形式") or "平板形").strip()
+            pair = component.get("pair")
+            if form != impingement.FORM_WELDED and not pair:
+                self._warn("无法编辑防冲板", "缺少原始参照管信息，请删除后重新布置。")
+                return
+            try:
+                replacement = self._impingement_geometry(form, pair, values)
+            except impingement.ImpingementError as exc:
+                self._warn("防冲板参数异常", str(exc))
+                return
+        center_baffle_side = None
+        if kind == "center_baffle":
+            pair = component.get("pair")
+            if not pair:
+                self._warn("无法编辑中间挡板", "缺少原始参照管信息，请删除后重新布置。")
+                return
+            center_baffle_side, reason = self._center_baffle_check(pair)
+            if reason:
+                self._warn("无法编辑中间挡板", reason)
+                return
+        elif kind == "bypass" and not component.get("anchor"):
+            self._warn("无法编辑旁路挡板", "缺少原始参照管信息，请删除后重新布置。")
+            return
+
+        self._push_undo()
+        self._write_back(values)
+        if kind in {"impingement", "impingement_folded", "impingement_welded"}:
+            self.removed.difference_update(component.get("deleted") or [])
+            self._apply_impingement_deletions(
+                replacement,
+                replacement["form"],
+                replacement.get("pair"),
+                component.get("rod_deleted") or [],
+            )
+            self.components[index] = replacement
+        elif kind == "center_baffle":
+            pair = component["pair"]
+            replacement = self._pair_geometry(kind, pair, center_baffle_side)
+            replacement.update(kind=kind, options=dict(values))
+            self.components[index] = replacement
+        elif kind == "bypass":
+            replacement = self._bypass_geometry(component["anchor"])
+            replacement.update(
+                kind=kind, anchor=component["anchor"], options=dict(values)
+            )
+            self.components[index] = replacement
+        elif kind == "slide":
+            self.components = [c for c in self.components if c.get("kind") != "slide"]
+            self.components.extend(
+                dict(item, kind="slide", options=dict(values))
+                for item in self._slide_geometries()
+            )
+        elif kind == "screw_ring":
+            self.components = [c for c in self.components if c.get("kind") != "screw_ring"]
+            self.components.extend(
+                dict(item, kind="screw_ring", options=dict(values))
+                for item in self._screw_ring_geometries(
+                    int(float(values.get("吊环螺钉数量") or 1))
+                )
+            )
+        else:
+            component["options"] = dict(values)
+
+        self.rebuild_scene()
+        self.refresh_hole_table()
+        self.status_message.emit(f"已更新{COMPONENT_LABEL.get(kind, '元件')}参数")
+
     def on_rubber_band(self, rect: QRectF) -> None:
         picked = [
             center for center in list(self._tube_items) + list(self._ghost_items)
@@ -1483,9 +1906,13 @@ class TubeLayoutPage(QWidget):
     def _param_text(self, name: str) -> str:
         return str(self.parameters.get(name, {}).get("value", "") or "").strip()
 
-    def _ask(self, title: str, fields: list[ParamField], hint: str = "") -> dict | None:
+    def _ask(
+        self, title: str, fields: list[ParamField], hint: str = "",
+        initial_values: dict | None = None,
+    ) -> dict | None:
         """布置元件前弹窗确认参数（正式程序同款）；离屏自检时直接取当前值。"""
         values = {spec.name: self._param_text(spec.name) for spec in fields}
+        values.update(initial_values or {})
         if self.headless:
             return values
         return ask_component_params(title, fields, values, hint=hint, parent=self)
@@ -1590,7 +2017,11 @@ class TubeLayoutPage(QWidget):
         self._push_undo()
         for center in placed:
             self.removed.add(center)
-            self.components.append({"kind": "free_rod" if free else "rod", "center": center})
+            self.components.append({
+                "kind": "free_rod" if free else "rod",
+                "center": center,
+                "options": dict(values),
+            })
         self._clear_selection_state()
         self.rebuild_scene()
         self.refresh_hole_table()
@@ -1629,7 +2060,9 @@ class TubeLayoutPage(QWidget):
             if point in self.removed:
                 continue
             self.removed.add(point)
-            self.components.append({"kind": "block_tube", "center": point})
+            self.components.append({
+                "kind": "block_tube", "center": point, "options": dict(values)
+            })
             added += 1
         self._clear_selection_state()
         self.rebuild_scene()
@@ -1671,7 +2104,9 @@ class TubeLayoutPage(QWidget):
             for center in targets:
                 geometry = self._bypass_geometry(center)
                 widths.append(max(float(v) for v in geometry["size"]))
-                self.components.append(dict(geometry, kind="bypass"))
+                self.components.append(
+                    dict(geometry, kind="bypass", options=dict(values))
+                )
             placed = len(targets)
             if widths:
                 self.set_parameter(
@@ -1686,9 +2121,11 @@ class TubeLayoutPage(QWidget):
                     self._warn("只允许对分程挡板两侧的换热管建立中间挡板！", reason)
                     self._undo.pop()
                     return
-                self.components.append(
-                    dict(self._pair_geometry("center_baffle", pair, side), kind="center_baffle")
-                )
+                self.components.append(dict(
+                    self._pair_geometry("center_baffle", pair, side),
+                    kind="center_baffle",
+                    options=dict(values),
+                ))
                 placed += 1
         self._clear_selection_state()
         self.rebuild_scene()
@@ -1730,7 +2167,7 @@ class TubeLayoutPage(QWidget):
         self._push_undo()
         geometries = self._slide_geometries()
         for geometry in geometries:
-            self.components.append(dict(geometry, kind="slide"))
+            self.components.append(dict(geometry, kind="slide", options=dict(values)))
         self.rebuild_scene()
         self.status_message.emit(
             f"已布置 {len(geometries)} 条滑道（按方位角/夹角沿壳体内壁，不占管孔）"
@@ -1806,17 +2243,21 @@ class TubeLayoutPage(QWidget):
 
         self._push_undo()
         deleted_total = 0
+        deleted_rods_total = 0
         for geometry, pair in placed:
             # 正式程序 build_impingement_plate：落位后立刻删掉干涉换热管（含弦外弓形区）
-            deleted = self.impingement_delete_centers(form, geometry, pair)
-            geometry["deleted"] = deleted
-            self.removed |= set(deleted)
-            deleted_total += len(deleted)
+            deleted_count, deleted_rod_count = self._apply_impingement_deletions(
+                geometry, form, pair
+            )
+            deleted_total += deleted_count
+            deleted_rods_total += deleted_rod_count
             self.components.append(geometry)
         self._clear_selection_state()
         self.rebuild_scene()
         self.refresh_hole_table()
         extra = f"，同时删掉 {deleted_total} 个干涉换热管" if deleted_total else ""
+        if deleted_rods_total:
+            extra += f"，同时删除 {deleted_rods_total} 根干涉拉杆"
         self.status_message.emit(
             f"已布置 {len(placed)} 块{form}防冲板（{'；'.join(details)}）{extra}"
         )
@@ -1840,7 +2281,9 @@ class TubeLayoutPage(QWidget):
         quantity = int(self._float("吊环螺钉数量") or 4)
         self._push_undo()
         for geometry in self._screw_ring_geometries(quantity):
-            self.components.append(dict(geometry, kind="screw_ring"))
+            self.components.append(
+                dict(geometry, kind="screw_ring", options=dict(values))
+            )
         self.rebuild_scene()
         self.status_message.emit(f"已布置 {quantity} 个吊环螺钉（沿管板外圆均布）")
 
@@ -2041,6 +2484,37 @@ class TubeLayoutPage(QWidget):
         self.lagan_summary.setText(
             f"拉杆标准要求数量{int(required) if required else '-'}  已有数量{rods}"
         )
+
+    def _update_divider_correction_tip(self, result: engine.LayoutResult) -> None:
+        self.divider_correction_tip.clear()
+        self.divider_correction_tip.setVisible(False)
+        form = self._param_text("管程分程形式")
+        if not is_local_tube_pass_cat(form):
+            return
+
+        param_map = {
+            name: str(row.get("value") or self.defaults.get(name, "")).strip()
+            for name, row in self.parameters.items()
+        }
+        param_map["换热管排列方式"] = canonical_tube_arrangement(
+            param_map.get("换热管排列方式", "")
+        )
+        D = result.input_json.get("LB_DL") or result.raw.get("DL")
+        d = result.input_json.get("LB_TubeD")
+        DN = result.input_json.get("LB_DN")
+        try:
+            local = run_local_tube_layout(
+                form, param_map, D=float(D), d=float(d), DN=float(DN)
+            )
+        except (TypeError, ValueError) as exc:
+            self.divider_correction_tip.setText(f"隔条尺寸修正提示计算失败：{exc}")
+            self.divider_correction_tip.setVisible(True)
+            return
+
+        tip = local["divider_corrections"].get("tip", "").strip()
+        if tip:
+            self.divider_correction_tip.setText(tip)
+            self.divider_correction_tip.setVisible(True)
 
     # ------------------------------------------------------ 对外数据
     def validation_issues(self) -> list[dict]:
@@ -2905,6 +3379,14 @@ class TubeLayoutPage(QWidget):
         geometry["center"] = (centre_x, -centre_y)  # 绘制坐标 -> 数学坐标
         geometry["thickness"] = thickness
         geometry["form"] = form
+        geometry["pair"] = [tuple(point) for point in pair] if pair else None
+        geometry["options"] = {
+            name: str((overrides or {}).get(name) or self._param_text(name))
+            for name in (
+                "防冲板形式", "放置位置", "防冲板厚度", "防冲板折边角度",
+                "防冲板宽度", "防冲板方位角", "至圆筒内壁距离",
+            )
+        }
         return geometry
 
     def _shell_inner_radius(self) -> float:
@@ -2984,6 +3466,98 @@ class TubeLayoutPage(QWidget):
             deleted.append((key[0], -key[1]))  # 绘制坐标 -> 数学坐标
         return sorted(deleted)
 
+    def impingement_interfering_rod_centers(
+        self, form: str, geometry: dict, pair=None
+    ) -> list[tuple[float, float]]:
+        """返回板体或弦外弓形区覆盖到的拉杆管孔（数学坐标）。"""
+        if not geometry.get("points"):
+            return []
+        thickness = float(
+            geometry.get("thickness") or self._float("防冲板厚度") or 0.0
+        )
+        scene_pair = [self._plot(center) for center in pair] if pair else []
+        anchors = {(round(x, 6), round(y, 6)) for x, y in scene_pair}
+        limit_radius = (self._float("布管限定圆 DL") or 0.0) / 2.0
+        shell_radius = self._shell_inner_radius()
+        hits: list[tuple[float, float]] = []
+
+        for component in self.components:
+            if component.get("kind") not in {"rod", "free_rod"}:
+                continue
+            center = component.get("center")
+            if not center:
+                continue
+            scene_center = self._plot(center)
+            if (round(scene_center[0], 6), round(scene_center[1], 6)) in anchors:
+                continue
+            options = component.get("options") or {}
+            diameter = (
+                options.get("拉杆直径")
+                or options.get("自由拉杆直径")
+                or self._float("拉杆直径")
+                or 16.0
+            )
+            try:
+                rod_diameter = float(diameter)
+            except (TypeError, ValueError):
+                rod_diameter = 16.0
+            rod_pool = [scene_center]
+
+            if form == impingement.FORM_WELDED:
+                rod_hits = impingement.welded_interference_centers(
+                    geometry["points"],
+                    thickness,
+                    rod_diameter,
+                    rod_pool,
+                    shell_radius,
+                )
+            else:
+                rod_hits = impingement.interference_centers(
+                    geometry["points"], thickness, rod_diameter, rod_pool
+                )
+                if scene_pair and limit_radius > 0:
+                    rod_hits += impingement.outer_cap_centers(
+                        scene_pair, rod_pool, limit_radius
+                    )
+
+            if rod_hits:
+                hits.append((round(float(center[0]), 6), round(float(center[1]), 6)))
+        return sorted(set(hits))
+
+    def _apply_impingement_deletions(
+        self,
+        geometry: dict,
+        form: str,
+        pair=None,
+        preserve_rod_deleted=(),
+    ) -> tuple[int, int]:
+        deleted = self.impingement_delete_centers(form, geometry, pair)
+        newly_deleted_rods = self.impingement_interfering_rod_centers(
+            form, geometry, pair
+        )
+        rod_deleted = {
+            (round(float(x), 6), round(float(y), 6))
+            for x, y in preserve_rod_deleted
+        }
+        rod_deleted.update(newly_deleted_rods)
+        geometry["deleted"] = deleted
+        geometry["rod_deleted"] = sorted(rod_deleted)
+        self.removed.update(deleted)
+        self.removed.update(rod_deleted)
+        if newly_deleted_rods:
+            deleted_keys = set(newly_deleted_rods)
+            self.components = [
+                component
+                for component in self.components
+                if component.get("kind") not in {"rod", "free_rod"}
+                or not component.get("center")
+                or (
+                    round(float(component["center"][0]), 6),
+                    round(float(component["center"][1]), 6),
+                ) not in deleted_keys
+            ]
+        return len(deleted), len(newly_deleted_rods)
+
     def _pair_geometry(self, kind: str, pair, side: str | None = None) -> dict:
         """按两根参照管的真实坐标算板类元件几何（照抄正式程序）。
 
@@ -3002,7 +3576,12 @@ class TubeLayoutPage(QWidget):
         thickness = self._float(name) or 6.0
         length = max(span - do - 2.0 * nominal_bridge_width(do), do * 0.5)
         center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-        return {"center": center, "size": (length, thickness), "angle": angle}
+        return {
+            "center": center,
+            "size": (length, thickness),
+            "angle": angle,
+            "pair": [tuple(pair[0]), tuple(pair[1])],
+        }
 
     def _bypass_geometry(self, center, pool=None) -> dict:
         """旁路挡板：宽度按正式程序公式算，板的外边缘永远贴着折流/支持板外径圆。
@@ -3046,7 +3625,10 @@ class TubeLayoutPage(QWidget):
             top_side = abs(edge - y) <= abs(y + edge)
             outer = outer_edge if top_side else -outer_edge
             mid = (x, outer - width / 2.0 if top_side else outer + width / 2.0)
-            return {"center": mid, "size": (thickness, width), "angle": 0.0}
+            return {
+                "center": mid, "size": (thickness, width), "angle": 0.0,
+                "anchor": (x, y),
+            }
 
         row = [c for c in pool if abs(c[1] - y) < 1e-6]
         near = min(row, key=lambda c: c[0]) if row else (x, y)
@@ -3059,7 +3641,10 @@ class TubeLayoutPage(QWidget):
         left_side = abs(x + edge) < abs(edge - x)
         outer = -outer_edge if left_side else outer_edge
         mid = (outer + width / 2.0 if left_side else outer - width / 2.0, y)
-        return {"center": mid, "size": (width, thickness), "angle": 0.0}
+        return {
+            "center": mid, "size": (width, thickness), "angle": 0.0,
+            "anchor": (x, y),
+        }
 
     def _slide_geometries(self) -> list[dict]:
         """滑道不选管：按 定位/形式/数量/方位角/夹角 沿壳体内壁布置。"""
@@ -3218,10 +3803,13 @@ class TubeLayoutPage(QWidget):
                         row["detail"] = str(exc)
                         rows.append(row)
                         continue
-                    deleted = self.impingement_delete_centers(form, geometry, None)
-                    geometry["deleted"] = deleted
-                    self.removed |= set(deleted)
-                    row["deleted"] = len(deleted)
+                    deleted_count, deleted_rod_count = self._apply_impingement_deletions(
+                        geometry, form, None
+                    )
+                    row["deleted"] = deleted_count
+                    row["deleted_rods"] = deleted_rod_count
+                    if deleted_rod_count:
+                        row["detail"] = f"删除 {deleted_rod_count} 根干涉拉杆"
                     self.components.append(geometry)
                     row["placed"] = 1
                     rows.append(row)
@@ -3239,15 +3827,19 @@ class TubeLayoutPage(QWidget):
                         continue
                     # 正式程序 build_impingement_plate：落位后立刻删掉干涉换热管
                     # （矩形带/折边三段 + 弦外弓形区 + 管程镜像）
-                    deleted = self.impingement_delete_centers(form, geometry, pair)
-                    geometry["deleted"] = deleted
-                    self.removed |= set(deleted)
-                    row["deleted"] = row.get("deleted", 0) + len(deleted)
+                    deleted_count, deleted_rod_count = self._apply_impingement_deletions(
+                        geometry, form, pair
+                    )
+                    row["deleted"] = row.get("deleted", 0) + deleted_count
+                    row["deleted_rods"] = row.get("deleted_rods", 0) + deleted_rod_count
                     self.components.append(geometry)
                     used.update(pair)
                     row["placed"] += 1
                 if row.get("deleted"):
                     note = f"删掉 {row['deleted']} 个干涉换热管"
+                    row["detail"] = f"{row['detail']}；{note}" if row["detail"] else note
+                if row.get("deleted_rods"):
+                    note = f"删除 {row['deleted_rods']} 根干涉拉杆"
                     row["detail"] = f"{row['detail']}；{note}" if row["detail"] else note
                 rows.append(row)
                 continue

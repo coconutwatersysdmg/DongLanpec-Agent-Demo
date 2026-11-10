@@ -88,10 +88,30 @@ class FlatFormTests(unittest.TestCase):
         points = impingement.flat_points(p1, p2, do, thk, "参照管顶部连线")
         shift = do / 2 + thk / 2 + 0.5
         self.assertAlmostEqual(_dist(points[0], points[1]), _dist(p1, p2))
-        # 屏幕上方 = 场景 y 更小
+        # 上半圆外侧 = 场景 y 更小
         self.assertAlmostEqual(points[0][1], p1[1] - shift)
         self.assertAlmostEqual(points[1][1], p2[1] - shift)
         self.assertAlmostEqual(points[0][0], p1[0])
+
+    def test_lower_half_shifts_below_reference_tubes(self):
+        p1, p2 = (-22.63, 457.29), (22.63, 457.29)
+        do, thk = 25.0, 10.0
+        points = impingement.flat_points(p1, p2, do, thk, "参照管顶部连线")
+        shift = do / 2 + thk / 2 + 0.5
+        self.assertAlmostEqual(_dist(points[0], points[1]), _dist(p1, p2))
+        self.assertAlmostEqual(points[0][1], p1[1] + shift)
+        self.assertAlmostEqual(points[1][1], p2[1] + shift)
+
+    def test_outward_side_is_selected_for_a_sloped_lower_pair(self):
+        pair = [(-30.0, 400.0), (30.0, 430.0)]
+        points = impingement.flat_points(pair[0], pair[1], 25.0, 10.0)
+        midpoint = ((pair[0][0] + pair[1][0]) / 2, (pair[0][1] + pair[1][1]) / 2)
+
+        self.assertGreater(
+            (points[0][0] + points[1][0]) / 2 * midpoint[0]
+            + (points[0][1] + points[1][1]) / 2 * midpoint[1],
+            midpoint[0] ** 2 + midpoint[1] ** 2,
+        )
 
     def test_center_line_shrinks_by_do(self):
         p1, p2 = (-22.63, -457.29), (22.63, -457.29)

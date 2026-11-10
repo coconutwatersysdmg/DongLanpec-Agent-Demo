@@ -16,7 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from PyQt5.QtCore import QItemSelectionModel, QRectF, Qt  # noqa: E402
+from PyQt5.QtGui import QFont, QFontMetrics  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
+    QAbstractItemView,
     QApplication,
     QGraphicsPathItem,
     QLabel,
@@ -115,38 +117,120 @@ def main() -> int:
 
     from PyQt5.QtWidgets import QComboBox, QLineEdit
 
-    from bundle.widgets import RightAlignedComboBox
+    from bundle.widgets import ParamComboBox
 
-    combo_editors = [w for w in page._editors.values() if isinstance(w, QComboBox)]
-    plain_combos = [w for w in combo_editors if isinstance(w, RightAlignedComboBox)]
-    locked_combos = [
+    combo_editors = [w for w in page._editors.values() if isinstance(w, ParamComboBox)]
+    plain_combos = [
         widget for name, widget in page._editors.items()
-        if isinstance(widget, RightAlignedComboBox)
+        if isinstance(widget, ParamComboBox)
         and bundle_params.spec_for(name, page.product_type, page.parameters).kind == "combo"
     ]
+    edit_combos = [
+        widget for name, widget in page._editors.items()
+        if isinstance(widget, ParamComboBox)
+        and bundle_params.spec_for(name, page.product_type, page.parameters).kind == "combo_edit"
+    ]
+    do_combo = page._editors.get("换热管外径 do")
+    length_combo = page._editors.get("换热管公称长度 LN")
     check(
-        bool(locked_combos)
-        and all(
-            w.lineEdit() is not None and w.lineEdit().isReadOnly() for w in locked_combos
-        ),
-        "5.3 普通下拉框不可手工输入",
-        f"{len(locked_combos)} 个普通下拉只读（文字右对齐），"
-        f"{len(plain_combos) - len(locked_combos)} 个可输入下拉保持可编辑",
+        len(plain_combos) >= 8
+        and all(w.lineEdit() is not None and w.lineEdit().isReadOnly() for w in plain_combos)
+        and all(w.lineEdit() is not None and not w.lineEdit().isReadOnly() for w in edit_combos)
+        and isinstance(do_combo, ParamComboBox) and do_combo.lineEdit().isReadOnly() is False
+        and isinstance(length_combo, ParamComboBox) and length_combo.lineEdit().isReadOnly() is False,
+        "5.3 普通下拉框只能选、换热管外径 do 与公称长度 LN 可输入也可下拉",
+        f"普通下拉 {len(plain_combos)} 个只读，可输入下拉 {len(edit_combos)} 个（do={do_combo.currentText()}、LN={length_combo.currentText()}）",
     )
 
-    # 5.7 参数值整列右对齐（数字框 + 下拉框文字都靠右）
-    edits = [w for w in page._editors.values() if isinstance(w, QLineEdit)]
-    right_edits = [w for w in edits if bool(w.alignment() & Qt.AlignRight)]
+    # 5.7 参数值整列右对齐（普通单元格文本 + 下拉框文字都靠右）
+    plain_items = [
+        page.param_table.item(row, 2)
+        for row, name in enumerate(bundle_params.PARAM_ORDER)
+        if page.param_table.cellWidget(row, 2) is None
+    ]
+    right_items = [
+        item for item in plain_items
+        if item is not None and bool(item.textAlignment() & Qt.AlignRight)
+    ]
     right_combos = [
         w for w in plain_combos
         if w.lineEdit() is not None and bool(w.lineEdit().alignment() & Qt.AlignRight)
     ]
     check(
-        len(right_edits) == len(edits)
+        len(right_items) == len(plain_items)
         and len(right_combos) == len(plain_combos)
-        and len(edits) + len(plain_combos) >= 20,
-        "5.7 参数值整列右对齐（数字框与下拉框文字都靠右）",
-        f"数字框 {len(right_edits)}/{len(edits)}、下拉框 {len(right_combos)}/{len(plain_combos)}",
+        and len(plain_items) + len(plain_combos) >= 20,
+        "5.7 参数值整列右对齐（单元格文本与下拉框文字都靠右）",
+        f"单元格 {len(right_items)}/{len(plain_items)}、下拉框 {len(right_combos)}/{len(plain_combos)}",
+    )
+
+    # 5.8 正式程序 104d4358：排列方式换新文案、do/LN 可输入下拉、普通参数是单元格文本
+    arrangement_combo = page._editors.get("换热管排列方式")
+    arrangement_items = (
+        [arrangement_combo.itemText(i) for i in range(arrangement_combo.count())]
+        if isinstance(arrangement_combo, QComboBox) else []
+    )
+    plain_cells = [
+        name for row, name in enumerate(bundle_params.PARAM_ORDER)
+        if page.param_table.cellWidget(row, 2) is None
+    ]
+    check(
+        arrangement_items == list(bundle_params.TUBE_ARRANGEMENT_OPTIONS)
+        and page._editors.get("换热管外径 do") is not None
+        and page._editors["换热管外径 do"].lineEdit().isReadOnly() is False
+        and page._editors.get("换热管公称长度 LN") is not None
+        and len(plain_cells) >= 40
+        and "折流板类型" in plain_cells and "吊环螺钉规格" in plain_cells,
+        "5.8 排列方式用新文案（30°/60°/90°/45°），普通参数回到单元格内编辑",
+        f"排列方式 {len(arrangement_items)} 项、单元格文本 {len(plain_cells)} 行",
+    )
+
+    # 5.9 下拉框样式照搬正式程序：白底、1px #CCCCCC 直角、14px 箭头区 + 灰色三角
+    sheet = arrangement_combo.styleSheet() if isinstance(arrangement_combo, QComboBox) else ""
+    from bundle.widgets import combo_arrow_url
+
+    arrow_ok = Path(combo_arrow_url()).exists()
+    check(
+        "#CCCCCC" in sheet and "width:14px" in sheet
+        and "down-arrow" in sheet and arrow_ok
+        and page.param_table.rowHeight(0) == 40,
+        "5.9 参数表下拉框样式与正式程序一致（灰边直角 + 灰色三角箭头 + 40 行高）",
+        f"箭头 {combo_arrow_url()} 存在={arrow_ok}，行高 {page.param_table.rowHeight(0)}",
+    )
+
+    # 5.10 单位列完整显示：四列宽度之和不超过视口（以前有 420 的下限，窗口一窄就把单位列挤出可视区）
+    table = page.param_table
+    widths = [table.columnWidth(col) for col in range(4)]
+    header_metrics = QFontMetrics(QFont(table.font().family(), 10, QFont.Bold))
+    unit_ok = widths[3] >= header_metrics.horizontalAdvance("单位") + 12
+    fits = sum(widths) <= table.viewport().width()
+    check(
+        fits and unit_ok,
+        "5.10 单位列完整显示（四列宽度不超过视口，单位列宽够放“单位”与 mm/°/个）",
+        f"列宽 {widths} 合计 {sum(widths)} / 视口 {table.viewport().width()}，单位列 {widths[3]}px",
+    )
+
+    # 5.11 参数值的普通格子单击即进编辑（正式程序 eventFilter 同款），双击也能进
+    from PyQt5.QtTest import QTest
+
+    plain_row = next(
+        row for row, name in enumerate(bundle_params.PARAM_ORDER)
+        if table.cellWidget(row, 2) is None
+        and (table.item(row, 2).flags() & Qt.ItemIsEditable)
+        and not table.isRowHidden(row)
+    )
+    pos = table.visualItemRect(table.item(plain_row, 2)).center()
+    table.clearSelection()
+    QTest.mouseClick(table.viewport(), Qt.LeftButton, Qt.NoModifier, pos)
+    QApplication.processEvents()
+    QApplication.processEvents()
+    click_edit = table.state() == QAbstractItemView.EditingState
+    QTest.keyClick(table, Qt.Key_Escape)
+    QApplication.processEvents()
+    check(
+        click_edit,
+        "5.11 参数值空格子单击就能改（不用先选中再点，双击自然也进得去）",
+        f"第 {plain_row + 1} 行“{bundle_params.PARAM_ORDER[plain_row]}”单击后进入编辑={click_edit}",
     )
 
     # 5.5 左侧参数表按正式程序 hidden_params 隐藏元件参数
@@ -182,7 +266,7 @@ def main() -> int:
     check(
         isinstance(form_editor, TubePassFormComboBox)
         and form_pixmap is not None and not form_pixmap.isNull()
-        and page.param_table.rowHeight(bundle_params.PARAM_ORDER.index("管程分程形式")) >= 50,
+        and page.param_table.rowHeight(bundle_params.PARAM_ORDER.index("管程分程形式")) >= 40,
         "5.6 管程分程形式显示示意图（不再显示数字）",
         f"图片 {form_pixmap.width()}x{form_pixmap.height()}"
         if form_pixmap is not None else "无图片",
@@ -528,11 +612,18 @@ def main() -> int:
     page.set_parameter("防冲板形式", "圆弧形", "自检", run_linkage=False)
     min_span = impingement_geometry.required_span_for_folded(do, pitch, fold_angle)
     pairs = pick_pairs(page.current_centers(), 1, "top", "row", min_span=min_span)
-    comps_before_plate = len(page.components)
+    plate_components_before = {id(component) for component in page.components}
     page.apply_placement_plan([
         PlacementItem("impingement", 1, "top", {"防冲板形式": "圆弧形"}),
     ])
-    plate = page.components[comps_before_plate] if len(page.components) > comps_before_plate else None
+    plate = next(
+        (
+            component for component in reversed(page.components)
+            if id(component) not in plate_components_before
+            and component.get("kind") == "impingement_folded"
+        ),
+        None,
+    )
     expected_plate = None
     if pairs and plate is not None:
         (x1, y1), (x2, y2) = pairs[0]
@@ -565,11 +656,18 @@ def main() -> int:
     page.set_parameter("防冲板形式", "平板形", "自检", run_linkage=False)
     page.set_parameter("放置位置", "参照管顶部连线", "自检", run_linkage=False)
     flat_pairs = pick_pairs(page.current_centers(), 1, "top", "row")
-    flat_before = len(page.components)
+    flat_components_before = {id(component) for component in page.components}
     page.apply_placement_plan([
         PlacementItem("impingement", 1, "top", {"防冲板形式": "平板形"}),
     ])
-    flat_plate = page.components[flat_before] if len(page.components) > flat_before else None
+    flat_plate = next(
+        (
+            component for component in reversed(page.components)
+            if id(component) not in flat_components_before
+            and component.get("kind") == "impingement"
+        ),
+        None,
+    )
     flat_ok = False
     if flat_pairs and flat_plate is not None:
         (x1, y1), (x2, y2) = flat_pairs[0]
@@ -591,7 +689,7 @@ def main() -> int:
 
     # 18.4c 焊接式防冲板：不选管，按 宽度 / 方位角 / 至圆筒内壁距离 定位（A/B 落在壳体内壁圆上）
     shell_r = (page._float("壳体内直径 Dis") or 1000.0) / 2.0
-    welded_before = len(page.components)
+    welded_components_before = {id(component) for component in page.components}
     page.set_parameter("防冲板形式", "焊接式", "自检", run_linkage=False)
     page.set_parameter("防冲板宽度", "200", "自检", run_linkage=False)
     page.set_parameter("防冲板方位角", "0", "自检", run_linkage=False)
@@ -599,7 +697,14 @@ def main() -> int:
     page.apply_placement_plan([
         PlacementItem("impingement", 1, "any", {"防冲板形式": "焊接式"}),
     ])
-    welded = page.components[welded_before] if len(page.components) > welded_before else None
+    welded = next(
+        (
+            component for component in reversed(page.components)
+            if id(component) not in welded_components_before
+            and component.get("kind") == "impingement_welded"
+        ),
+        None,
+    )
     welded_ok = False
     if welded is not None:
         points = welded["points"]
@@ -831,11 +936,20 @@ def main() -> int:
     thick_field.editor.setText("14")
     thick_field.editor.textEdited.emit("14")
     app.processEvents()
-    comps_before_card = len(page.components)
+    components_before_card = {id(component) for component in page.components}
     anchors_now = [tuple(a) for a in edit_card.items[0].anchors]
     edit_card.confirm_button.click()
     app.processEvents()
-    new_plate = page.components[comps_before_card] if len(page.components) > comps_before_card else None
+    new_plate = next(
+        (
+            component for component in reversed(page.components)
+            if id(component) not in components_before_card
+            and component.get("kind") in {
+                "impingement", "impingement_folded", "impingement_welded"
+            }
+        ),
+        None,
+    )
     span_now = (
         math.hypot(anchors_now[1][0] - anchors_now[0][0], anchors_now[1][1] - anchors_now[0][1])
         if len(anchors_now) == 2 else 0.0

@@ -45,7 +45,26 @@ TUBE_PATTERN_BY_PASS = {
     "12": ("12a.1", "12a.2", "12b.1", "12b.2"),
 }
 
-TIE_ROD_DIAMETERS = ("10", "12", "14", "16", "19", "20", "22", "25", "30", "32", "35", "38", "45", "50", "55", "57")
+# 正式程序 My_Piping.py 里参数表下拉框的选项原样照搬（2026-11-10 最新提交 104d4358）
+# 换热管外径 do：下拉可选，也能手工输入小数（25.4、19.05）
+DO_OPTIONS = ("10", "12", "14", "16", "19", "20", "22", "25", "30", "32", "35", "38", "45", "50", "55", "57")
+# 换热管公称长度 LN：下拉可选，也能手工输入整数
+LENGTH_OPTIONS = ("1000", "1500", "2000", "2500", "3000", "4500", "6000", "7500", "8000", "9000", "12000")
+# 换热管排列方式：正式程序新文案带角度，内部仍归一成 正三角形/转角正三角形/正方形/转角正方形
+TUBE_ARRANGEMENT_OPTIONS = (
+    "正三角形排列（30°）",
+    "转角正三角形排列（60°）",
+    "正方形排列（90°）",
+    "转角正方形排列（45°）",
+)
+TUBE_ARRANGEMENT_CANONICAL = {
+    "正三角形排列（30°）": "正三角形",
+    "转角正三角形排列（60°）": "转角正三角形",
+    "正方形排列（90°）": "正方形",
+    "转角正方形排列（45°）": "转角正方形",
+}
+# 拉杆直径下拉：正式程序没有 22、24 这两档
+TIE_ROD_DIAMETERS = ("10", "12", "14", "16", "19", "20", "25", "27", "30", "32", "35", "38", "45", "50", "55", "57")
 
 # 参数名 -> (单位, 控件类型, 选项)
 #   kind: combo 普通下拉框 / combo_edit 下拉+手工输入 / number 数值输入 / text 文本
@@ -59,16 +78,16 @@ _SPECS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "管箱内直径 Dit": ("mm", "number", ()),
     "布管限定圆 DL": ("", "number", ()),
     "换热管布置方式": ("", "combo", ("对中", "跨中", "任意")),
-    "换热管外径 do": ("mm", "number", ()),
+    "换热管外径 do": ("mm", "combo_edit", DO_OPTIONS),
     "换热管壁厚 δ": ("mm", "number", ()),
-    "换热管排列方式": ("", "combo", ("正三角形", "转角正三角形", "正方形", "转角正方形")),
-    "换热管公称长度 LN": ("mm", "number", ()),
+    "换热管排列方式": ("", "combo", TUBE_ARRANGEMENT_OPTIONS),
+    "换热管公称长度 LN": ("mm", "combo_edit", LENGTH_OPTIONS),
     "换热管中心距 S": ("", "number", ()),
     "拉杆形式": ("", "combo", ("焊接拉杆", "螺纹拉杆")),
     "拉杆直径": ("mm", "combo", TIE_ROD_DIAMETERS),
     "折流/支持板外径": ("mm", "number", ()),
     "折流/支持板间距": ("mm", "number", ()),
-    "折流板类型": ("", "combo_edit", ("单弓形", "双弓形", "支持板")),
+    "折流板类型": ("", "text", ()),          # 正式程序：普通单元格，不是下拉
     "折流板切口方向": ("", "combo", ("水平上下", "垂直左右")),
     "折流板要求切口率": ("%", "number", ()),
     "折流板切口与中心线间距a": ("mm", "number", ()),
@@ -89,15 +108,15 @@ _SPECS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "防冲板宽度": ("mm", "number", ()),
     "防冲板方位角": ("°", "number", ()),
     "至圆筒内壁距离": ("mm", "number", ()),
-    "隔条位置尺寸 W": ("", "combo_edit", ("程序推荐",)),
-    "竖直隔条位置尺寸 Wy1": ("mm", "combo_edit", ("程序推荐",)),
-    "竖直隔条位置尺寸 Wy2": ("mm", "combo_edit", ("程序推荐",)),
-    "水平隔条位置尺寸 Wx0": ("mm", "combo_edit", ("程序推荐",)),
-    "水平隔条位置尺寸 Wx1": ("mm", "combo_edit", ("程序推荐",)),
+    "隔条位置尺寸 W": ("", "text", ()),      # 正式程序：普通单元格（值可为“程序推荐”）
+    "竖直隔条位置尺寸 Wy1": ("mm", "text", ()),
+    "竖直隔条位置尺寸 Wy2": ("mm", "text", ()),
+    "水平隔条位置尺寸 Wx0": ("mm", "text", ()),
+    "水平隔条位置尺寸 Wx1": ("mm", "text", ()),
     "非布管区域弦高（0°/180°）": ("mm", "number", ()),
     "非布管区域弦高（90°/270°）": ("mm", "number", ()),
     "吊环螺钉起始方位角": ("°", "number", ()),
-    "吊环螺钉规格": ("mm", "combo", ("M16", "M20", "M24", "M30", "M36")),
+    "吊环螺钉规格": ("mm", "text", ()),      # 正式程序：普通单元格（如 M20）
     "吊环螺钉孔中心距": ("mm", "number", ()),
     "吊环螺钉数量": ("个", "number", ()),
     "切边长度 L1": ("mm", "number", ()),
@@ -161,10 +180,78 @@ LB_MAPPING: dict[str, str] = {
 # 枚举映射（正式程序相同）
 LB_VALUE_MAP: dict[str, dict[str, str]] = {
     "换热管布置方式": {"对中": "0", "跨中": "1", "任意": "2"},
-    "换热管排列方式": {"正三角形": "1", "转角正三角形": "0", "正方形": "2", "转角正方形": "3"},
+    "换热管排列方式": {
+        "正三角形": "1", "转角正三角形": "0", "正方形": "2", "转角正方形": "3",
+        # 正式程序 2026-11-10 起的新文案（带角度），码值不变
+        "正三角形排列（30°）": "1",
+        "转角正三角形排列（60°）": "0",
+        "正方形排列（90°）": "2",
+        "转角正方形排列（45°）": "3",
+    },
     "折流板切口方向": {"水平上下": "1", "垂直左右": "2"},
     "是否以外径为基准": {"是": "1", "否": "0"},
 }
+
+
+def normalize_tube_arrangement(value) -> str:
+    """库里的规范名/旧值 → 下拉框显示文案（正式程序 _normalize_tube_arrangement_name 的反向）。"""
+    text = str(value or "").strip()
+    if not text or text in TUBE_ARRANGEMENT_OPTIONS:
+        return text
+    canon = TUBE_ARRANGEMENT_CANONICAL.get(text, text)
+    for label, name in TUBE_ARRANGEMENT_CANONICAL.items():
+        if name == canon:
+            return label
+    return text
+
+
+def canonical_tube_arrangement(value) -> str:
+    """下拉文案/旧值 → 存库用的规范名（正式程序就是这么存：正三角形/转角正三角形…）。"""
+    text = str(value or "").strip()
+    return TUBE_ARRANGEMENT_CANONICAL.get(text, text)
+
+
+_SLIPWAY_LOCATION_LEGACY = {
+    "滑道与管板焊接": "固定管板",
+    "固定管板": "固定管板",
+    "滑道与第一块折流板焊接": "第一块折流板或支持板",
+    "第一块折流板或支持板": "第一块折流板或支持板",
+}
+
+
+def normalize_param_value(name: str, value, parameters: dict | None = None) -> str:
+    """正式程序参数表填充时的几条兜底（照搬 My_Piping 参数表填充逻辑）。
+
+    · 拉杆形式空：do ≥ 19 → 螺纹拉杆，否则焊接拉杆
+    · 滑道数量空：默认 2
+    · 中间挡板/挡管安装方式不是 贯穿/分割：一律 贯穿
+    · 滑道形式旧文案“圆钢条式滑道”→ 圆钢滑道
+    · 滑道定位旧文案 → 固定管板 / 第一块折流板或支持板
+    """
+    text = "" if value is None else str(value).strip()
+    if name == "拉杆形式" and not text:
+        do_value = None
+        for other, data in (parameters or {}).items():
+            if other != "换热管外径 do":
+                continue
+            try:
+                do_value = float(str((data or {}).get("value")).strip())
+            except (TypeError, ValueError):
+                do_value = None
+        if do_value is not None:
+            return "螺纹拉杆" if do_value >= 19 else "焊接拉杆"
+        return "螺纹拉杆"
+    if name == "滑道数量" and not text:
+        return "2"
+    if name in {"中间挡板安装方式", "中间挡管安装方式"} and text not in {"贯穿", "分割"}:
+        return "贯穿"
+    if name == "滑道形式" and text == "圆钢条式滑道":
+        return "圆钢滑道"
+    if name == "滑道定位":
+        return _SLIPWAY_LOCATION_LEGACY.get(text, text or "固定管板")
+    if name == "折流板类型" and not text:
+        return "单弓形"
+    return text
 
 # 与 show_baffle_info 一致的折流板口径：这些参数仅对单弓形/双弓形有意义
 BAFFLE_ONLY_FIELDS = (
