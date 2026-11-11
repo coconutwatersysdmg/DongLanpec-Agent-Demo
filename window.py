@@ -1193,7 +1193,7 @@ class DesignWindow(QMainWindow):
         self.append_chat(
             "assistant",
             "你好，我是管束设计助手。\n"
-            "点击左侧“开始管束设计”。",
+            "正在读取数据库并生成设计草稿……",
         )
 
     def _apply_default_split(self) -> None:

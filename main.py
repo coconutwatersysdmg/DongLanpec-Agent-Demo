@@ -1,16 +1,15 @@
-"""管束设计 AI AGENT 启动入口。
-
-用法：
-    python main.py                         正常启动图形界面
-    python main.py --screenshot out.png    离屏渲染截图后退出（用于验收留证）
-        可选 --stage 0..3      指定截图时展开的 Tab
-                               0 管板型式 / 1 布管 / 2 管-板连接 / 3 轴向设计
-        可选 --product 产品ID  指定载入的产品，缺省取数据库第一条
-"""
 import argparse
 import os
 from pathlib import Path
 import sys
+
+# 控制台输出统一 UTF-8（取代原 .cmd 启动器里的 PYTHONUTF8=1）
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
+# 无论从哪个目录双击/运行，都以本文件所在目录为工作目录
+os.chdir(Path(__file__).resolve().parent)
 
 
 def _install_font(app):
@@ -52,6 +51,9 @@ def main():
     else:
         # 正常启动直接铺满屏幕：对话是主界面，越大越好（仍可点右上角还原）
         window.showMaximized()
+        # 一运行直接进入管束设计：自动读取数据库并生成草稿，
+        # 不再要求先点左侧“开始管束设计”（按钮保留，用于修复数据库后重试）。
+        QTimer.singleShot(0, window.start_design)
 
     if args.screenshot:
         # 离屏截图不需要事件循环：同步载入会话、展开 Tab、抓图后立即退出。
